@@ -1945,6 +1945,7 @@ document.addEventListener('keydown', (e) => {
  * question, on screen at once and spoken as soon as the run summary has been said.
  */
 function returnHome(): void {
+  if (switchToUpdate()) return;
   if (!settings.voiceMenu) update({ voiceMenu: true });
   show('voice');
   voiceMenu.preview();
@@ -1954,6 +1955,23 @@ function returnHome(): void {
   });
 }
 let homeToken = 0;
+
+// A newer version of the app was installed in the background (offline copy):
+// switch to it straight away, so an update shows on the first open, not the
+// second. Never during guidance - then on the way back to the menu. Not on a
+// first visit (there was no older version to replace).
+const hadOldVersion = !!navigator.serviceWorker?.controller;
+let updateWaiting = false;
+function switchToUpdate(): boolean {
+  if (!updateWaiting || session.state !== 'idle' || track.state !== 'idle') return false;
+  location.reload();
+  return true;
+}
+navigator.serviceWorker?.addEventListener('controllerchange', () => {
+  if (!hadOldVersion) return;
+  updateWaiting = true;
+  switchToUpdate();
+});
 
 // Initial state (after every const above is initialised).
 applySettings(settings);
