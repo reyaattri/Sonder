@@ -176,7 +176,7 @@ document.addEventListener(
   'pointerdown',
   (e) => {
     if (soundOn || current !== 'welcome') return;
-    const onChoice = !!(e.target as HTMLElement).closest('.home-choice, #btn-sound, #btn-settings-welcome, #btn-voice-menu');
+    const onChoice = !!(e.target as HTMLElement).closest('.home-choice, #btn-sound, #btn-settings-welcome, #btn-voice-menu, #btn-theme-home');
     void turnSoundOn(!onChoice);
   },
   { capture: true },
@@ -194,6 +194,30 @@ $('btn-how').addEventListener('click', async () => {
   announcer.say(HOW_IT_WORKS + homeSpeech(homeStepNow), { interrupt: true });
   announcer.showText(HOW_IT_WORKS);
 });
+
+// ---------------------------------------------------------------------------
+// Light / dark toggle on both home screens (for demos; also in Settings).
+// ---------------------------------------------------------------------------
+const darkQuery = window.matchMedia?.('(prefers-color-scheme: dark)');
+const isDark = (): boolean => settings.theme === 'dark' || (settings.theme === 'auto' && !!darkQuery?.matches);
+
+function renderThemeButtons(): void {
+  const dark = isDark();
+  for (const id of ['btn-theme', 'btn-theme-home']) {
+    const b = document.getElementById(id);
+    if (!b) continue;
+    b.textContent = dark ? '☀️ Light mode' : '🌙 Dark mode';
+    b.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+  }
+}
+
+function toggleTheme(): void {
+  const next = isDark() ? 'light' : 'dark';
+  update({ theme: next });
+  announcer.showText(next === 'dark' ? 'Dark mode.' : 'Light mode.');
+}
+
+darkQuery?.addEventListener?.('change', () => renderThemeButtons());
 
 function renderHome(step: HomeStep, focus = true): void {
   homeStepNow = step;
@@ -1579,6 +1603,7 @@ function applySettings(s: Settings): void {
   session.applySettings(simOverrides ? { ...s, ...simOverrides } : s);
   if (s.theme === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = s.theme;
+  renderThemeButtons();
   $('pip').hidden = !s.debugOverlay;
   $('tpip').hidden = !s.debugOverlay;
   applyMountUi();
@@ -1796,6 +1821,8 @@ function renderVoice(step: MenuStep, hi: number, heard: string): void {
   });
 })();
 
+$('btn-theme').addEventListener('click', toggleTheme);
+$('btn-theme-home').addEventListener('click', toggleTheme);
 $('btn-visual-menu').addEventListener('click', () => {
   voiceMenu.active = false;
   listener.stop();

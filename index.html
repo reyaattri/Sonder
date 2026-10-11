@@ -20,6 +20,7 @@
     <!-- Voice menu (eyes-free start screen) -->
     <main id="screen-voice" class="screen voice">
       <div class="voice-top">
+        <button type="button" id="btn-theme" class="linkish theme-toggle">☀️ Light mode</button>
         <button type="button" id="btn-visual-menu" class="linkish">Visual menu</button>
       </div>
       <h1 tabindex="-1" id="voice-title">EchoPath</h1>
@@ -34,6 +35,9 @@
 
     <!-- Home -->
     <main id="screen-welcome" class="screen home" data-active>
+      <div class="voice-top">
+        <button type="button" id="btn-theme-home" class="linkish theme-toggle">☀️ Light mode</button>
+      </div>
       <header class="brand">
         <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
           <circle cx="32" cy="32" r="6" fill="currentColor" />
