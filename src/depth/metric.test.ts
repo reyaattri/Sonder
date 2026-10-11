@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CameraModel } from '../track/world';
-import { alignToGround, groundRange, occupancy, type DepthMap } from './metric';
+import { alignToGround, boxDistance, groundRange, occupancy, type DepthMap } from './metric';
 
 const cam: CameraModel = { width: 196, height: 252, fovDeg: 65, pitch: 0.35, mountHeight: 1.3 };
 
@@ -99,5 +99,22 @@ describe('occupancy (virtual cane)', () => {
     const strongest = o.echoes.reduce((a, b) => (b.strength > a.strength ? b : a));
     expect(strongest.azimuth).toBeGreaterThan(0.1); // to the right
     expect(strongest.range).toBeLessThan(3);
+  });
+});
+
+describe('measured distance to a detected object', () => {
+  it('a short object (a child, 1.1 m tall) 3 m away measures about 3 m, where box size would say much further', () => {
+    const dm = scene([{ x0: -0.25, x1: 0.25, z0: 3, h0: 0, h1: 1.1 }]);
+    const al = alignToGround(dm, cam)!;
+    const f = Math.max(cam.width, cam.height) / 2 / Math.tan((cam.fovDeg * Math.PI) / 360);
+    // Project the object's corners to get its image box.
+    const px = (x: number, up: number, z: number) => {
+      const c = Math.cos(cam.pitch), s = Math.sin(cam.pitch), yd = cam.mountHeight - up;
+      const yc = c * yd - s * z, zc = s * yd + c * z;
+      return { u: cam.width / 2 + (f * x) / zc, v: cam.height / 2 + (f * yc) / zc };
+    };
+    const tl = px(-0.25, 1.1, 3), br = px(0.25, 0, 3);
+    const box = { x: tl.u / cam.width, y: tl.v / cam.height, w: (br.u - tl.u) / cam.width, h: (br.v - tl.v) / cam.height };
+    expect(boxDistance(dm, cam, al, box)!).toBeCloseTo(3, 0);
   });
 });

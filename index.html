@@ -55,7 +55,7 @@
           </button>
           <button type="button" role="radio" data-activity="track">
             <span class="act-name">Track run</span>
-            <span class="act-desc">Running track lane guide. Silent when centred, pings and buzzes as you drift. Live pace and heart rate.</span>
+            <span class="act-desc">Running track lane guide. Silent when centred, pings and buzzes as you drift. Live pace and distance.</span>
           </button>
         </div>
       </section>
@@ -66,10 +66,8 @@
         <p class="hint"><strong>Training aid.</strong> In competition, World Para Athletics requires T11 athletes to run tethered to a guide, and some races ban earphones for para athletes. Check your race's rules, and train with a sighted guide nearby.</p>
         <ul class="checks">
           <li data-check="gps"><span class="dot"></span><span class="what">GPS (pace and distance)</span><span class="val">Asks when you start</span></li>
-          <li data-check="hr"><span class="dot"></span><span class="what">Heart rate</span><span class="val">Not connected</span></li>
           <li data-check="haptics"><span class="dot"></span><span class="what">Vibration</span><span class="val">Checking</span></li>
         </ul>
-        <button id="btn-hr" type="button">Connect heart-rate strap or watch</button>
       </section>
 
       <section class="card" aria-labelledby="mount-title" id="mount-card">
@@ -101,29 +99,22 @@
       </div>
       <button id="btn-voice-menu" type="button">Voice menu (eyes-free)</button>
       <section class="card" aria-labelledby="practice-title">
-        <h2 id="practice-title">Live, practice and real-world tests</h2>
-        <p class="hint">Live uses your camera in the real world, like Google Maps Live View: scan around you, then walk. Or practise on a simulated world or real footage.</p>
+        <h2 id="practice-title">Live and practice</h2>
+        <p class="hint">Live uses your camera in the real world: scan around you, then walk. Practice runs EchoPath on a simulated world.</p>
         <label class="field">Scene
           <select id="practice-scene">
             <optgroup label="Live, real world (your camera)">
               <option value="live-walk">Live: scan around you, then walk</option>
-              <option value="live-run">Live: follow a painted line or track lane</option>
+              <option value="live-line">Live: walk or run along a painted line</option>
+              <option value="live-lane">Live: run in a track lane</option>
             </optgroup>
             <optgroup label="Simulation (real EchoPath pipeline, simulated world)">
               <option value="walk">Walk: park path with poles, bins, benches, rocks, leaves, people</option>
               <option value="stadium">Run: 400 m track, lane 3</option>
               <option value="road">Run: road with yellow guide line</option>
-              <option value="purple">Run: Project Guideline purple line (Google's model)</option>
-            </optgroup>
-            <optgroup label="Real world (real footage, not simulated)">
-              <option value="pg-photo">Real photo: Google Project Guideline test path, checked against Google's labels</option>
-              <option value="photo-walk">Real photo, walk mode: the same leafy path (scan, leaves, path)</option>
-              <option value="video-walk">Real video: your own walking recording</option>
-              <option value="video-run">Real video: your own running recording</option>
             </optgroup>
           </select>
         </label>
-        <input type="file" id="practice-file" accept="video/*" hidden />
         <button id="btn-practice" type="button">Start practice</button>
       </section>
       <p class="note">Everything runs on this phone. Nothing is recorded or uploaded.</p>
@@ -239,7 +230,6 @@
           <option value="walk">Walk: park path with obstacles and people</option>
           <option value="stadium">Run: 400 m track, lane 3</option>
           <option value="road">Run: road with yellow guide line</option>
-          <option value="purple">Run: Project Guideline purple line</option>
         </select>
         <p class="sim-truth" id="wsim-truth" aria-live="off"></p>
       </section>
@@ -274,7 +264,6 @@
         <li class="chip" id="tchip-state"><span class="dot"></span><span class="txt">Running</span></li>
         <li class="chip" id="tchip-lane"><span class="dot"></span><span class="txt">Finding lane</span></li>
         <li class="chip" id="tchip-gps"><span class="dot"></span><span class="txt">GPS</span></li>
-        <li class="chip" id="tchip-hr"><span class="dot"></span><span class="txt">No HR</span></li>
         <li class="chip" id="tchip-perf"><span class="dot"></span><span class="txt">Starting</span></li>
       </ul>
       <section class="sim" id="sim-panel" hidden aria-label="Simulator">
@@ -290,12 +279,12 @@
           <select id="sim-course" aria-label="Simulated course">
             <option value="stadium">400 m track, lane 3</option>
             <option value="road">Road with yellow guide line</option>
-            <option value="purple">Project Guideline purple line (Google's model)</option>
             <option value="walk">Walk: park path with obstacles and people</option>
           </select>
           <button type="button" id="sim-slower" aria-label="Slower">−</button>
           <button type="button" id="sim-faster" aria-label="Faster">+</button>
         </div>
+        <button type="button" id="sim-demo" class="sim-demo" aria-pressed="false">Demo all cases once: drift, big drift, runner ahead, someone on the line, worn paint</button>
         <p class="sim-truth" id="sim-truth" aria-live="off"></p>
       </section>
       <div class="stage">
@@ -313,7 +302,6 @@
         <div><dt>Distance</dt><dd id="m-dist">0 m</dd></div>
         <div><dt>Pace /km</dt><dd id="m-pace">–</dd></div>
         <div><dt>Cadence</dt><dd id="m-cad">–</dd></div>
-        <div><dt>Heart rate</dt><dd id="m-hr">–</dd></div>
         <div><dt>Laps</dt><dd id="m-laps">0</dd></div>
       </dl>
       <p class="gesture" id="track-hint">Press and hold anywhere to pause. Double-tap to hear your stats.</p>
@@ -382,7 +370,6 @@
                 <option value="white">White</option>
                 <option value="yellow">Yellow</option>
                 <option value="blue">Blue</option>
-                <option value="purple">Purple (Google Project Guideline line)</option>
                 <option value="any">Any bright line</option>
               </select>
             </label>
@@ -395,10 +382,10 @@
           </div>
           <label>Drift feedback style
             <select name="trackStyle">
-              <option value="pg">Google Project Guideline sounds (recommended): their steering, warning, turn and stop sounds, with a buzz in the ear of the side to turn</option>
+              <option value="pg">Guide-line sounds (recommended): steering, warning, turn and stop sounds, with a buzz in the ear of the side to turn</option>
               <option value="glide">Smooth glide: a soft tone that rises from low to high as you need to correct, from the side to steer toward</option>
               <option value="rumble">Rumble strip: clicks from the line I'm drifting onto</option>
-              <option value="guideline">Guideline (Google Project Guideline style): beeps on the side to steer toward, high warning at the edge</option>
+              <option value="guideline">Guideline style: beeps on the side to steer toward, high warning at the edge</option>
               <option value="tone">Continuous tone: steady when on line, moves and turns dissonant as I drift</option>
             </select>
           </label>
@@ -420,7 +407,6 @@
           </div>
           <div class="row2">
             <label><span>Step length (m), used without GPS</span><input type="number" name="runStepLength" min="0.4" max="2.2" step="0.05" /></label>
-            <label><span>Heart-rate alert above (0 = off)</span><input type="number" name="maxHeartRate" min="0" max="230" step="1" /></label>
           </div>
           <div class="row2">
             <label><span>Camera height (m): chest 1.3, waist 1.0</span><input type="number" name="mountHeight" min="0.6" max="1.8" step="0.05" /></label>
@@ -435,10 +421,7 @@
             <label><span>Target pace per km (mm:ss, blank = off)</span><input type="text" inputmode="numeric" name="targetPace" placeholder="5:30" /></label>
             <label><span>Cadence metronome (steps/min, 0 = off)</span><input type="number" name="metronomeSpm" min="0" max="220" step="2" /></label>
           </div>
-          <div class="row2">
-            <label><span>Max heart rate for zones (0 = off)</span><input type="number" name="hrMax" min="0" max="230" step="1" /></label>
-            <label class="row"><input type="checkbox" name="trackCountdown" /> 3, 2, 1, go before starting</label>
-          </div>
+          <label class="row"><input type="checkbox" name="trackCountdown" /> 3, 2, 1, go before starting</label>
         </fieldset>
 
         <fieldset>
@@ -568,9 +551,6 @@
           <button type="button" id="btn-hp-check" class="secondary">Run headphone check</button>
           <button type="button" id="btn-disclaimer" class="secondary">Read the safety notice</button>
           <button type="button" id="btn-offline" class="secondary">Save all models for offline use</button>
-          <label class="file secondary">Use a test video instead of the camera
-            <input type="file" id="file-video" accept="video/*" />
-          </label>
           <button type="button" id="btn-log" class="secondary">Download session log</button>
           <label class="row"><input type="checkbox" name="debugOverlay" /> Show camera view with detection boxes (for sighted helpers)</label>
           <p id="stats" class="stats" aria-live="off"></p>

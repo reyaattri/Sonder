@@ -4,7 +4,7 @@ import type { CameraModel } from '../track/world';
  * Turning a monocular depth AI's RELATIVE output into metres, without LiDAR.
  *
  * Depth Anything outputs relative inverse depth ("disparity"): bigger =
- * closer, up to an unknown scale and shift. Project Guideline solved the same
+ * closer, up to an unknown scale and shift. The guide-line system solved the same
  * problem by aligning ML depth to ARCore's 3D points with RANSAC. In a
  * browser we have no ARCore, but we DO know the geometry of the ground: from
  * the camera's tilt (accelerometer) and height, every ground pixel's true
@@ -114,18 +114,43 @@ export interface Occupancy {
   echoes: { azimuth: number; range: number; strength: number }[];
 }
 
+/**
+ * Measured forward distance (m) to a detected object: the median depth of
+ * the inner part of its box (edges are background). Unlike box-size
+ * distance, it doesn't assume a height, so children, seated or partly
+ * visible people and objects of any size are measured correctly.
+ * `box` is in 0..1 image coordinates. Null if too few valid pixels.
+ */
+export function boxDistance(dm: DepthMap, cam: CameraModel, al: Alignment, box: { x: number; y: number; w: number; h: number }): number | null {
+  const sx = cam.width / dm.width, sy = cam.height / dm.height;
+  const x0 = Math.max(0, Math.floor((box.x + box.w * 0.3) * dm.width)), x1 = Math.min(dm.width - 1, Math.ceil((box.x + box.w * 0.7) * dm.width));
+  const y0 = Math.max(0, Math.floor((box.y + box.h * 0.25) * dm.height)), y1 = Math.min(dm.height - 1, Math.ceil((box.y + box.h * 0.75) * dm.height));
+  const zs: number[] = [];
+  for (let y = y0; y <= y1; y++)
+    for (let x = x0; x <= x1; x++) {
+      const q = al.a * dm.data[y * dm.width + x] + al.b;
+      if (!(q > 1 / 30)) continue;
+      const r = ray((x + 0.5) * sx, (y + 0.5) * sy, cam);
+      zs.push((r.z * (1 / q)) / norm(r));
+    }
+  if (zs.length < 6) return null;
+  zs.sort((a, b) => a - b);
+  // Lower-middle: the object's own front rather than background showing through.
+  return zs[Math.floor(zs.length * 0.4)];
+}
+
 const BINS = 12;
 
 /**
  * Metric 3D points from aligned depth -> an occupancy picture of the path
- * (after Project Guideline's occupancy map with a clearance zone): the
+ * (after the guide-line system's occupancy map with a clearance zone): the
  * nearest thing standing up out of the ground in the left / centre / right
  * of your path, head-height hazards, and echo directions for echolocation.
  */
 export function occupancy(dm: DepthMap, cam: CameraModel, al: Alignment, corridorHalf = 0.45): Occupancy {
   const sx = cam.width / dm.width, sy = cam.height / dm.height;
   const out: Occupancy = { left: null, center: null, right: null, head: null, low: null, echoes: [] };
-  // Low-obstacle cells (0.25 m), like Project Guideline's occupancy grid: a
+  // Low-obstacle cells (0.25 m), like the guide-line system's occupancy grid: a
   // cell only counts with several points in it, so depth noise can't trip it.
   const lowCells = new Map<string, { n: number; o: Obstacle }>();
   const half = (cam.fovDeg / 2) * (Math.PI / 180) * (Math.min(cam.width, cam.height) / Math.max(cam.width, cam.height));

@@ -63,46 +63,8 @@ export class PaceCoach {
   }
 }
 
-/** Heart-rate zone 1-5 as a percentage of maximum heart rate (50/60/70/80/90 %). */
-export function hrZone(bpm: number, max: number): number {
-  const p = bpm / max;
-  if (p < 0.6) return 1;
-  if (p < 0.7) return 2;
-  if (p < 0.8) return 3;
-  if (p < 0.9) return 4;
-  return 5;
-}
-
-/** Announces zone changes once they have held for 15 s (no flicker at a boundary). */
-export class ZoneWatcher {
-  private zone = 0;
-  private candidate = 0;
-  private since = 0;
-
-  reset(): void {
-    this.zone = this.candidate = 0;
-  }
-
-  update(bpm: number | null, max: number, nowS: number): string | null {
-    if (!bpm || !max) return null;
-    const z = hrZone(bpm, max);
-    if (z !== this.candidate) {
-      this.candidate = z;
-      this.since = nowS;
-    }
-    if (z !== this.zone && nowS - this.since >= 15) {
-      const up = z > this.zone;
-      const first = this.zone === 0;
-      this.zone = z;
-      if (first) return null; // don't announce the starting zone
-      return `Heart rate zone ${z}${up ? ', going up' : ''}. ${bpm} beats.`;
-    }
-    return null;
-  }
-}
-
 /**
- * STOP guard (after Google's Project Guideline): if the line is lost while
+ * STOP guard (after the open-source guide-line system): if the line is lost while
  * moving, or the runner has left the lane/line entirely, signal STOP, and
  * keep repeating it until the line is found again - then say "go".
  */
@@ -121,11 +83,13 @@ export class StopGuard {
    * @returns 'stop' to play/repeat the STOP cue now, 'go' once when guidance is
    * back, or null.
    */
-  update(lost: boolean, offset: number, moving: boolean, nowMs: number): 'stop' | 'go' | null {
+  update(lost: boolean, offset: number, moving: boolean, nowMs: number, outLimit = 0.6): 'stop' | 'go' | null {
     if (lost) this.lostSince ??= nowMs;
     else this.lostSince = null;
     const lostTooLong = this.lostSince !== null && nowMs - this.lostSince > 1500 && moving;
-    const outOfLane = !lost && Math.abs(offset) > 0.6;
+    // `outLimit`: normalised offset that counts as out of the lane (lanes 0.6 =
+    // into the next lane; a single painted line allows more before STOP).
+    const outOfLane = !lost && Math.abs(offset) > outLimit;
     if (lostTooLong || outOfLane) {
       const first = !this.stopped;
       this.stopped = true;
@@ -135,7 +99,7 @@ export class StopGuard {
       }
       return null;
     }
-    if (this.stopped && !lost && Math.abs(offset) < 0.4) {
+    if (this.stopped && !lost && Math.abs(offset) < outLimit * 0.66) {
       this.stopped = false;
       return 'go';
     }

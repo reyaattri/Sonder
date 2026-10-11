@@ -8,10 +8,27 @@ no video ever leaves the device.
 EchoPath has two modes, chosen on the home screen:
 
 - **Walk**: everyday walking and jogging. People, vehicles and obstacles become spatial sounds.
-- **Track run**: lane guidance on a running track (the KineticSpatial plan). Silent while you are centred; a spatial ping and a vibration from the side you're drifting toward. Live pace, distance, cadence, laps and heart rate are spoken on a schedule.
+- **Track run**: lane guidance on a running track (the KineticSpatial plan). Silent while you are centred; a spatial ping and a vibration from the side you're drifting toward. Live pace, distance, cadence and laps are spoken on a schedule.
 
 > EchoPath is a **supplementary aid**. It does not replace a cane, a guide dog or
 > sighted assistance, and it can miss obstacles (glass, stairs, drop-offs, low light).
+
+## Run it on your phone (step by step)
+
+1. **Laptop and phone on the same Wi-Fi.** No guest networks or hotspots that isolate devices.
+2. **Install once** on the laptop (needs [Node.js](https://nodejs.org) 20 or newer): `npm install`
+3. **Start the secure server:** `npm run dev:https`. The first run downloads the models and sounds. Leave this window open.
+4. **Find the address.** The terminal prints a line like `Network: https://192.168.1.23:5173/`. That is the address for the phone.
+5. **Open it on the phone** in **Chrome** (Android) or **Safari** (iPhone). Type the address exactly, including `https://` and `:5173`.
+6. **Accept the certificate warning.** It's the laptop's own test certificate. Chrome: *Advanced → Proceed*. Safari: *Show Details → visit this website*.
+7. **Tap the screen once** to start. The voice menu talks you through it, or tap *Visual menu*.
+8. **Allow the camera** (and motion sensors on iPhone) when asked. Allow the microphone if you want to answer by voice.
+9. **Connect headphones** (Bluetooth or wired) and run *Sound check*. The sound should circle your head.
+10. **Wear the phone** on your chest or waist, back camera facing forward, tilted slightly down.
+11. **Choose a mode** under *Live and practice*: *Live: scan around you, then walk*, *Live: walk or run along a painted line*, or *Live: run in a track lane*. Or use *Start*.
+12. **Optional: install it.** Chrome menu → *Add to Home screen*, or Safari Share → *Add to Home Screen*, so it opens full-screen like an app.
+
+If the page won't load on the phone: check that both are on the same Wi-Fi, and allow Node.js through the Windows firewall (Windows asks the first time; choose *Private networks*). If the camera won't open, make sure the address starts with `https://`.
 
 ## Quick start
 
@@ -46,10 +63,9 @@ Strap the phone to your chest, back camera forward and tilted slightly down so i
 - **Run metrics** (`src/track/run.ts`, `devices.ts`):
   - Distance and pace come from GPS (inaccurate fixes and jumps rejected), or from steps × step length when GPS is unavailable (indoor tracks).
   - Cadence comes from the accelerometer.
-  - Heart rate comes from any Bluetooth chest strap or watch broadcasting the standard Heart Rate service (Chrome/Edge; not on iPhone).
-  - Stats are spoken every lap, every km or every N minutes. Optional high-heart-rate alert.
+  - Stats are spoken every lap, every km or every N minutes.
   - Double-tap or a headphone "next track" press asks for stats any time.
-- **Runner ahead**: the object detector runs on the **CPU** in its worker, about 3 times a second, so it never competes with the GPU for camera frames. It says "Runner ahead, 3 metres."
+- **Someone ahead**: the object detector runs on the **CPU** in its worker, about 3 times a second, so it never competes with the GPU for camera frames. Within 8 m it says "Someone ahead, 6 metres." On a road it adds which side to pass; in a lane it doesn't.
 
 Measured on a synthetic 60 fps track, with the runner swaying ±0.35 lane widths, heading changes, camera bob, and another runner crossing the lane:
 - 29–52 lane updates per second, with lane detection at 3.3–3.7 ms per frame;
@@ -99,8 +115,7 @@ EchoPath never opens the microphone, so headsets stay in stereo (A2DP) mode rath
 
 **Appearance.** Follows the device's light or dark setting by default; Settings → *Appearance* can force either.
 
-**No camera?** Settings → *Use a test video instead of the camera* plays a recorded walk
-through the full pipeline. Settings → *Download session log* exports every cue, spoken
+Settings → *Download session log* exports every cue, spoken
 warning and system event, with timestamps and capture-to-sound latency. Use it to score
 recall and false alerts against a labelled test walk.
 
@@ -158,59 +173,87 @@ Accuracy:
 
 ### Depth without LiDAR: virtual white cane and echolocation
 
-The White Cane app reads the iPhone LiDAR scanner through ARKit. Browsers cannot access LiDAR (and Android WebXR depth needs a full-screen AR session). Instead, EchoPath does what Google Project Guideline does: a depth AI (**Depth Anything V2 Small**, Apache-2.0) estimates depth from the camera image, and the relative output is turned into **metres** by RANSAC-fitting `1/range = a*disparity + b` on pixels whose true distance is known from the ground geometry (camera tilt from the accelerometer, height from the mount). Every pixel then has a 3D position. It runs in its own worker on WebGPU (fp16), falling back to WASM (int8). On this laptop it takes about 65–90 ms per frame.
+The White Cane app reads the iPhone LiDAR scanner through ARKit. Browsers cannot access LiDAR (and Android WebXR depth needs a full-screen AR session). Instead, EchoPath does what research guide-line systems for blind runners do: a depth AI (**Depth Anything V2 Small**, Apache-2.0) estimates depth from the camera image, and the relative output is turned into **metres** by RANSAC-fitting `1/range = a*disparity + b` on pixels whose true distance is known from the ground geometry (camera tilt from the accelerometer, height from the mount). Every pixel then has a 3D position. It runs in its own worker on WebGPU (fp16), falling back to WASM (int8). On this laptop it takes about 65–90 ms per frame.
 
 - **Virtual white cane.** The nearest obstacle of any kind in your path (wall, pole, open door, branch) becomes a smooth sonar tone, higher and quicker as it nears, from its direction. Head-height hazards, which a real cane misses, add a bright shimmer and a spoken warning. Unrecognised close obstacles straight ahead also trigger the blocked-path guidance.
 - **Synthetic echolocation** (Settings, *Echolocation clicks*). A soft click, then an echo from each surface: delayed by its distance (time-stretched ×6 so you can hear it), coming from its direction, fainter and duller further away.
 - Tested on a rendered scene with a runner 3 m ahead: measured at 2.7 m (body front), head-height part flagged, alignment quality 1.0.
 
-### Track mode: Project Guideline-level detection and a simulator
+### Track mode: guide-line detection and a simulator
 
-- **World model** (`src/track/world.ts`), following Project Guideline:
+- **World model** (`src/track/world.ts`):
   - line keypoints are projected onto the ground in metres;
   - they are accumulated across frames, moved by your own motion (speed and gyroscope turn);
   - a RANSAC curve is fitted;
   - control comes from look-ahead (pure-pursuit) steering, with turn detection and a Kalman-smoothed offset;
   - lane crossings are counted, so guidance brings you back to *your* lane;
-  - STOP fires if the line is lost while moving or you leave the lane.
+  - STOP fires if the line is lost while moving, or you leave the lane: into the next lane on a track, or more than 1.5 m off a single painted line (smaller drifts get guidance back, not STOP).
+  - Paint worn away or covered: if no line has been seen for 1.5 s while it should be in view, it's lost (STOP). A line that's only out of view because you drifted is followed from memory.
 - **Smooth guide tone** (default): one continuous tone that glides from low to high as the needed correction grows, swells softly instead of beeping, comes from the side to steer toward, and fades to silence on line. A soft edge warning sounds in the other ear. Speech only for a big drift that lasts: "Move left."
-- **Simulator** (Home, *Practice and real-world tests*):
+- **Simulator** (Home, *Live and practice*):
   - a real 400 m track (84.39 m straights, 36.5 m bend radius, 1.22 m lanes), or a road with a yellow guide line;
   - rendered from a chest camera into the **real** pipeline, with simulated step bounce, tilt and turn rate;
   - steer by hand, or let the autopilot (a runner who only hears EchoPath) run.
   - Measured: **in lane 94.5 % over 170 m including a full bend; position estimate within 3–9 cm of the truth.**
 
-### Google Project Guideline: their model, their sounds, their test data
+### Guide-line sounds
 
-[Project Guideline](https://github.com/google-research/project-guideline) (Apache-2.0) is Google's system for blind runners following a painted line. EchoPath uses its released pieces directly; `npm run setup:assets` downloads them.
+The track sounds come from an open-source (Apache-2.0) guide-line sound pack (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)); `npm run setup:assets` downloads them.
 
-- **Guideline segmentation model** (`guideline.tflite`, DeepLab-style, 513×513, two masks; mask 1 is the line), run with MediaPipe ImageSegmenter in a worker, as Project Guideline does. Their block-keypoint extraction is ported (`src/track/pgKeypoints.ts`).
-  - **GPU self-test.** On this Windows/Chrome laptop the GPU delegate runs the model but returns garbage masks. At start-up the worker runs Google's real test photo on the GPU, and keeps the GPU only if it finds the line where Google's labels say it is. Otherwise it uses the CPU, which reproduces Google's result (about 145–170 ms per frame here).
-- **Sound pack.** Their steering, warning and stop sounds, with their mapping: steering angle shaped with `sensitivity_curvature 0.4`, max rotation 45°, warning from 0.4 to 1.5 m off the line. The steering sound plays on the side you must turn toward. An **ear vibration** (a 48/51 Hz rumble with 24 Hz flutter) plays in that ear only, so the side to turn *vibrates*.
-- **Quiet by design.** Small drifts are silent or a soft tone. Speech comes only for a big drift that lasts (over 1.2 s, at most every 6 s), and a global limiter keeps non-urgent speech at least 6 s apart with no repeats within 20 s.
-- **360° perception while running.** A soft beacon sits on the line ahead. Other runners are tracked and placed around you in space (HRTF), and a runner straight ahead in your lane gets an obstacle cue.
-- **Their test data, as a real-world check.** `guideline1.png` is a real waist-camera photo of their purple line on a leafy path, and comes with Google's hand-labelled mask. Choose *Real photo: Google Project Guideline test path*. EchoPath runs it through the full track pipeline and scores Google's model against Google's labels. **Measured: 100 % of keypoints on the real line, 91 % of the line found, mean error 1.4 px.** EchoPath reads 0.18 m right of the line, *steer left*, which is correct.
-- What we do **not** use: their depth model (it fails on the browser GPU delegate and takes 365 ms on CPU, so Depth Anything is used instead), and their Unreal simulator (desktop C++; EchoPath has its own browser simulators). Google has not released Project Guideline's training dataset.
+- **Steering, warning and stop sounds**, with the same mapping: steering angle shaped with `sensitivity_curvature 0.4`, max rotation 45°, warning from 0.4 to 1.5 m off the line. The steering sound plays on the side you must turn toward. An **ear vibration** (a 48/51 Hz rumble with 24 Hz flutter) plays in that ear only, so the side to turn *vibrates*.
+- **Quiet by design.** Small drifts get a soft sound only. Speech comes only for a big drift that lasts (over 1.2 s, at most every 6 s).
+- **360° perception while running.** A soft beacon sits on the line ahead. Other runners are tracked and placed around you in space (HRTF), and someone straight ahead gets an obstacle cue.
 
-### Live mode: the real world, through your camera
+### Live modes: the real world, through your camera
 
-Home → *Live, practice and real-world tests* → **Live: scan around you, then walk**. You can also say "live" in the voice menu.
+Home → *Live and practice*, or say "live" in the voice menu.
 
-- **Scan first, like Google Maps Live View.** Hold the phone at chest height, camera facing out, and turn slowly left, then right (about 9 s). EchoPath builds a 360° picture as you turn, using the gyroscope for heading:
+| Live mode | What it does |
+|---|---|
+| Scan around you, then walk | The walk guide, after a 360° scan. |
+| Walk or run along a painted line | Any colour of line (white, yellow or blue). |
+| Run in a track lane | Follows the two lane lines. |
+
+All three show the camera large, in the same layout as the simulators, with what EchoPath sees drawn on it. Under it is a plain readout, for example *"Line: found (14 points) · You: 0.12 m left of the line · steer right · Moving: 1.1 m/s · 14 m"*. The mini-map below scrolls as you move.
+
+- **Scan first, like a live-view map app.** Hold the phone at chest height, camera facing out, and turn slowly left, then right (about 9 s). EchoPath builds a 360° picture as you turn, using the gyroscope for heading:
   - where the walkable path goes;
   - what's around you (detector and depth);
   - steps and rocks (depth);
   - leaf litter (see below).
 
   Then it says it in short sentences with **clock positions**, the convention orientation-and-mobility instructors teach: *"Walkable path at 12 o'clock, straight ahead. Bench, 2 o'clock, about 4 metres. Leaves on the path at 11 o'clock. It may be slippery."* Guidance starts right after. Say "scan" (push-to-talk) or tap **Scan around me** to rescan.
-- **Big live view.** The camera fills the panel, in its real shape (portrait phone or landscape webcam). On top are drawn the walkable path (green), leaves (orange), detected objects and the step-around arrows. Under it, a plain-text readout replaces the old black stats box.
-- **Leaf litter detector** (`src/perception/ground.ts`, no ML, runs every 3rd frame). The ground is cut into cells; leaf litter is *busy* (texture above the surface you're walking on, adaptively) and *warm* (brown, orange, beige), never green. On Google's real photo it finds the leaf bank along the right edge, and flags nothing on the concrete path, the purple line, or Google's asphalt test frame. Leaves in your path get one spoken note (*"Leaves on the path ahead. Could be slippery."*), then quiet for 30 s.
-- **Real photo, walk mode** runs the same scan on Google's leafy-path photo. Result: *"Walkable path at 12 o'clock, straight ahead. Nothing in the way within a few metres. Leaves along the edge of the path."*
-- **Live run**: *Live: follow a painted line or track lane* opens the camera with the large live view. It uses the same pipeline as the simulator: Google's line model for purple lines, colour for others.
+- **Leaf litter detector** (`src/perception/ground.ts`, no ML, runs every 3rd frame). The ground is cut into cells; leaf litter is *busy* (texture above the surface you're walking on, adaptively) and *warm* (brown, orange, beige), never green. Leaves in your path get one short spoken note, then quiet.
+- **Depth-measured distances.** Distance from box size assumes a standard height, which is wrong for children, seated or partly visible people and objects. Each detected object's distance is now blended with Depth Anything's measurement of that object; for objects cut off by the frame edge, depth is used alone.
+- **Painted line, live.** The live painted-line mode uses the "line" course with any line colour. That's what the simulator verifies: on the yellow road, "any colour" gives the same result as "yellow" (1 cm estimate error, 100 % on line). The old live option used the saved course setting, which defaults to track lanes, so a single painted line was never found.
+
+### Calm by design: sound only when something needs you
+
+Nothing beeps constantly. Silence means nothing needs your attention right now.
+
+- **Track and road:** the steering sound is **silent while you're on the line**. The original design ticks quietly all the time; EchoPath doesn't. It fades in only once you're about 0.25 m off, in the ear of the side to turn. The bend sound plays only for clear bends, at half volume. The 360° run beacon is off by default.
+- **Walking:** the calm cue setting (the default) is silent unless something is **in your path within 3.5 m**, or **coming at you**. Things beside you that aren't approaching are silent. Pulses are slower (at most 3 a second). "Surround" mode, which gives everything a continuous presence sound, is off by default.
+- **Existing users** are moved to these calm settings automatically (settings version 8).
+- **Measured (walk simulator, 32 s):** 83 % of the time completely silent. The 10 sounds were all for something in the walker's path (a blockage, a person to step around), plus 3 spoken sentences. **Track simulator, normal running:** silent; the steering sound stayed at zero within 0.23 m of the line.
+
+### Talking only when it matters (walk mode)
+
+Sounds carry where things are, continuously; speech is kept for what matters. Every sentence goes through one policy (`src/speech/talkPolicy.ts`):
+
+| Kind of message | Rule |
+|---|---|
+| STOP, head height close | Always allowed. Never the same sentence twice within 4 s. |
+| Step left / right | At least 5 s apart, and 2 s after anything else. |
+| Approaching warnings | Only for things **in your path** (or vehicles), once per object, under 3 s to contact, and only after 8 s of quiet. While blocked, the step-around guidance does the talking. |
+| Notes (leaves, a step or rock, someone walking your way) | At least 20 s apart. |
+| Everything except STOP | At most 4 sentences in any 30 s. |
+
+- **"Passed. Continue forward."** is now a soft chime with no words. "Way opened. Go ahead carefully." is only said after an actual STOP.
+- **Flat look-alikes** (shadows, road markings, manhole covers) get only the ground sound, never words. Only depth-measured bumps are spoken.
 
 ### Voice: everything spoken, and accurate speech-to-text
 
-- **The voice menu** covers walk, live scan, run, practice (every simulator and the real photo), sound check and settings. After you stop, it comes back by itself.
+- **The voice menu** covers walk, live scan, run, practice (every simulator), sound check and settings. After you stop, it comes back by itself.
 - **Recognition accuracy:**
   - Each question only listens for its own answers. A small grammar like this is the biggest accuracy gain.
   - It checks *all* the recogniser's alternatives, not just the first.
@@ -223,21 +266,34 @@ Home → *Live, practice and real-world tests* → **Live: scan around you, then
   - Run: *stats, pause, resume, stop, louder, quieter*.
   - The microphone opens only for those few seconds. Bluetooth headsets switch to call mode while it's open, and the first use says so.
 
-### Practice and real-world tests (one dropdown)
+### Practice (one dropdown)
 
-Home → *Practice and real-world tests*. The same dropdown is in the simulator panels, so you can switch between scenes while running.
+Home → *Live and practice*. The same dropdown is in the simulator panels, so you can switch between scenes while running.
 
 | Scene | What it is |
 |---|---|
-| Walk: park path | Simulated. Lamp posts, bollards, bins, traffic cones, traffic barrels (like Project Guideline's obstacle test frame), benches along the edge, sign plates at **head height**, rocks, fallen leaves. People walk toward you (and sidestep, as people do), walk ahead slower, and cross. |
-| Run: 400 m track / yellow line / purple line | Simulated courses (above). The purple line runs Google's model. |
-| Real photo: Project Guideline test path | Real footage, scored against Google's labels. |
-| Real video: your walking / running recording | Real footage. Record with the phone where you'll wear it, then replay it through the real pipeline. |
+| Walk: park path | Lamp posts, bollards, bins, traffic cones, orange traffic barrels, benches along the edge, sign plates at **head height**, rocks, fallen leaves. People walk toward you (and sidestep, as people do), walk ahead slower, and cross. |
+| Run: 400 m track, lane 3 | A real-geometry track. |
+| Run: road with yellow guide line | A bending road with a painted line. |
 
-The **walk simulator** feeds the real walk pipeline: object detector, Depth Anything virtual cane, path model, looming, cue policy and speech. Its autopilot is a blind walker who keeps to the path by feel (shorelining the grass edge), slows as the cane tone quickens, steps aside or stops **only** when EchoPath says so, and steps back after touching something. It scores obstacles in the way, avoided, bumps, head bumps and helper assists. Project Guideline's own simulator does not support obstacles yet (their README).
+**Demo all cases once** (track and road simulators) runs a scripted sequence once. Then it says *"All cases done. Back to normal running on the line."* and goes back to normal running, with the accuracy readout reset. After the demo on the road: estimate error 2 cm, runner always within 0.24 m of the line, silent. During the demo, the screen says what's happening, what EchoPath should do, and what it is doing right now. Measured on both courses:
 
-- **Unrecognised obstacles** (a pole or bench the detector has no class for) are measured in 3D by depth. The step-around now steps **away from where depth measured it**, checked against the walkable path. Before this, the side came from a clutter guess, and in the simulator that sent the walker into a bench.
-- **Measured** (144 m, one run, 12–13 fps): 2 obstacles in the walking line, both avoided; 0 bumps; 0 head bumps; 0 assists. Only 4 distinct spoken messages. Before the bench, reflex and depth-side fixes, a similar run had 5 bumps. Runs vary because people move randomly.
+| Case | Road (yellow line) | 400 m track (lanes) |
+|---|---|---|
+| 1. On the line | silent | silent |
+| 2. Slow drift (0.3 m) | steering sound only, no words | steering sound only |
+| 3. Big drift (1 m) | "Move left.", guided back, no STOP | over the lane line: "Stop.", walked back, "Line found. Go." |
+| 4. Slower runner ahead | "Someone ahead, 8 metres. Pass on the left.", passes, guided back | "Someone ahead, 8 metres.", eases off behind |
+| 5. Someone standing on the line | "Someone ahead, 8 metres. Pass on the right.", goes round | "Someone ahead, 4 metres.", slows until they step aside |
+| 6. Paint worn away for 20 m | "Stop.", then "Line found. Go." | "Stop.", then "Go." |
+
+- **The simulated people are drawn realistically** (proportions, shading, tapered limbs, a natural stance, trousers for walkers), so the real detector recognises them, as it would a photo. They are detected in 32 of 36 look × pose × distance combinations (4–8 m), up from almost none for standing people with the old stick figures.
+- **The simulated runner behaves like a blind runner:** it drifts, hears only EchoPath, passes on the side it's told, and stops on STOP. A sighted helper walks it back after 3 s; never a jump, so the camera sees it happen.
+
+The **walk simulator** feeds the real walk pipeline: object detector, Depth Anything virtual cane, path model, looming, cue policy and speech. Its autopilot is a blind walker who keeps to the path by feel (shorelining the grass edge), slows as the cane tone quickens, steps aside or stops **only** when EchoPath says so, and steps back after touching something. It scores obstacles in the way, avoided, bumps, head bumps and helper assists.
+
+- **Unrecognised obstacles** (a pole or bench the detector has no class for) are measured in 3D by depth. The step-around steps **away from where depth measured it**, checked against the walkable path.
+- **Measured** (144 m, one run, 12–13 fps): 2 obstacles in the walking line, both avoided; 0 bumps; 0 head bumps; 0 assists. Runs vary because people move randomly.
 
 ### Voice menu (eyes-free)
 
@@ -247,7 +303,7 @@ The app opens on a full-screen voice menu: *Tap anywhere to start.* It speaks ea
 
 - Each Bluetooth headset appears twice: *Headphones (X)* is stereo; *Headset (X Hands-Free)* is mono and cannot do spatial audio. EchoPath's Sound check says which one is playing, and warns when sound is going to the **laptop speakers** instead.
 - Fix steps are built into Sound check: connect in Bluetooth settings, pick *Headphones*, and untick *Hands-free Telephony* in the device's Services if Windows keeps switching.
-- **Audio buffer** is set to *Balanced* automatically on Bluetooth (stops crackle). **Keep-alive** plays an inaudible signal so the headphones don't power down the link and clip the next cue.
+- **Audio buffer** is set to *Balanced* automatically on Bluetooth (stops crackle). **Keep-alive** plays a near-silent signal (about −83 dB) so the headphones don't power down the link and clip the next cue. It plays only while guidance is running on Bluetooth headphones, never on menus, pause or wired output.
 
 ## How it works
 
@@ -297,8 +353,7 @@ camera ─▶ resize (canvas) ─▶ Web Worker: detect(frame) ─▶ filter (co
   - capture→sound latency is p50 ≈ 145–180 ms, p95 ≈ 175–217 ms (target ≤ 250 ms).
 - Worn chest mode with simulated walking (accelerometer events at 1.8 steps/s): detected as walking at 1.2 m/s, tilt −3°, controls hidden until pause, and "What's around me?" answered *"Person, ahead, about 5 metres, approaching."*
 - Track mode: see the measurements above.
-- Real-world check on Google's labelled photo: see Project Guideline above.
-- 168 unit tests.
+- 171 unit tests.
 
 ## Not yet verified / known gaps
 
@@ -313,10 +368,10 @@ camera ─▶ resize (canvas) ─▶ Web Worker: detect(frame) ─▶ filter (co
 - **Bluetooth headphones** add ~100 ms or more of output latency. Use wired or low-latency earbuds for the demo.
 - **Someone ahead walking your way** (fixed, unit-tested). While you walk, a person in your path who has been tracked for at least 0.8 s and is closing slower than 0.6 m/s is no longer a STOP. You hear *"Person ahead, walking your way. Pass on the left."* once. Within 1.2 m, when you're standing still, or when someone is coming toward you, it's still a STOP. A person just seen is never assumed safe. In the latest simulator run the cue didn't trigger: no simulated walker was tracked as slowly closing for long enough. So far it's verified by tests only.
 - **Walk pipeline speed** (fixed): 12–13 fps in the simulator on this laptop (detector about 50 ms). The earlier 6 fps was the simulator's own rendering cost, now cached, plus a few seconds on the slower detector model before it switches automatically.
-- **Live camera, microphone and gyroscope** couldn't be exercised in the development preview browser, which blocks the camera and microphone. The scan, leaf detector and voice matching were verified on Google's real photo and with unit tests. Try *Live* on a phone.
-- **Simulated imagery.** The walk and track simulators are flat-shaded renderings. The detector and depth model were trained on real photos, so the simulator understates or overstates some detections. The real-photo and real-video scenes are the check for that.
+- **Live camera, microphone and gyroscope** couldn't be exercised in the development preview browser, which blocks the camera and microphone. The scan, leaf detector, voice matching and the talk policy are covered by unit tests and the simulators. Try *Live* on a phone.
+- **Simulated imagery.** The simulators are rendered scenes. The detector and depth model were trained on real photos, so detection in the simulator is a guide, not a guarantee. Some walking poses at 4 m are still missed.
 
 ## Third-party notices
 
-- Google Project Guideline (models, sounds, test images): Apache-2.0, © Google LLC. Downloaded at setup, not committed.
+- Guide-line sound pack: Apache-2.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Downloaded at setup, not committed.
 - Depth Anything V2 Small: Apache-2.0. MediaPipe EfficientDet-Lite models and tasks-vision: Apache-2.0. YOLOX-nano: Apache-2.0.

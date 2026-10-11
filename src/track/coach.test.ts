@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hrZone, LapTimer, PaceCoach, StopGuard, ZoneWatcher } from './coach';
+import { LapTimer, PaceCoach, StopGuard } from './coach';
 
 describe('lap splits', () => {
   it('announces each lap with the comparison to the last', () => {
@@ -24,25 +24,7 @@ describe('pace coach', () => {
   });
 });
 
-describe('heart-rate zones', () => {
-  it('zones from % of max', () => {
-    expect(hrZone(100, 200)).toBe(1);
-    expect(hrZone(130, 200)).toBe(2);
-    expect(hrZone(150, 200)).toBe(3);
-    expect(hrZone(170, 200)).toBe(4);
-    expect(hrZone(185, 200)).toBe(5);
-  });
-
-  it('announces a change only after it holds for 15 s, never the starting zone', () => {
-    const z = new ZoneWatcher();
-    expect(z.update(150, 200, 0)).toBeNull();
-    expect(z.update(150, 200, 20)).toBeNull(); // starting zone settles silently
-    expect(z.update(172, 200, 30)).toBeNull(); // just crossed
-    expect(z.update(172, 200, 46)).toBe('Heart rate zone 4, going up. 172 beats.');
-  });
-});
-
-describe('STOP guard (Project Guideline-style)', () => {
+describe('STOP guard (guide-line style)', () => {
   it('lost line while moving -> STOP after 1.5 s, repeated every 3 s, then GO when found', () => {
     const g = new StopGuard();
     expect(g.update(true, 0, true, 0)).toBeNull();
@@ -57,5 +39,14 @@ describe('STOP guard (Project Guideline-style)', () => {
     const g = new StopGuard();
     expect(g.update(true, 0, false, 5000)).toBeNull();
     expect(g.update(false, 0.7, true, 6000)).toBe('stop');
+  });
+});
+
+describe('STOP guard on a single painted line', () => {
+  it('a 1 m drift off a painted line is guidance, not STOP; 1.6 m is STOP', () => {
+    const g = new StopGuard();
+    const lim = (1.5 / 0.5) * 0.5; // as track mode computes it for a line course
+    expect(g.update(false, 1.0, true, 0, lim)).toBeNull();
+    expect(g.update(false, 1.6, true, 100, lim)).toBe('stop');
   });
 });

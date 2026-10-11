@@ -61,7 +61,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
  */
 export function pulseRateHz(d: number): number {
   const t = clamp((5 - d) / 4, 0, 1);
-  return 0.8 + 3.2 * t;
+  return 0.6 + 2.4 * t; // calm: at most 3 pulses a second, even when very close
 }
 
 /** 0 (far, >= 5 m) .. 1 (touching, <= 1 m): drives gain and pitch. */

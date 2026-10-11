@@ -209,7 +209,7 @@ export function earcon(ctx: BaseAudioContext, dest: AudioNode, name: EarconName,
     lineLost: ['triangle', [330, 330], 0.16, 0.45],
     // The blockage is gone: you can move again (gentle, rising, open).
     opened: ['sine', [523, 659, 880], 0.11, 0.4],
-    // Track: STOP (Project Guideline-style): unmistakable, falling, repeated.
+    // Track: STOP (guide-line style): unmistakable, falling, repeated.
     stopCue: ['square', [880, 587, 392, 880, 587, 392], 0.11, 0.4],
     // Track: a bend is coming (soft two-note glide).
     bend: ['triangle', [587, 698], 0.09, 0.3],

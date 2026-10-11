@@ -16,11 +16,11 @@ const out = (o: Partial<PolicyOutput>): PolicyOutput => ({
 describe('spoken guidance state machine', () => {
   it('stop -> blockage gone: tells you to move again', () => {
     const a = nextGuidance(null, out({ blocked: true, noWayAround: true }), 'Person');
-    expect(a.text).toMatch(/No clear way around.*Stop or wait/);
+    expect(a.text).toMatch(/No way around\. Stop\./);
     expect(nextGuidance('none', out({ blocked: true, noWayAround: true }), 'Person').text).toBeNull(); // no repeats
     const b = nextGuidance('none', out({}), 'Person');
     expect(b).toMatchObject({ key: null, resume: true });
-    expect(b.text).toMatch(/opened\. Continue forward/);
+    expect(b.text).toMatch(/Way opened\. Go ahead carefully/);
     expect(b.text).not.toMatch(/clear|safe/i);
   });
 
@@ -31,7 +31,7 @@ describe('spoken guidance state machine', () => {
 
   it('step left -> past it: tells you to carry on forward', () => {
     expect(nextGuidance(null, out({ blocked: true, guideSide: 'left' }), 'Chair').text).toBe('Chair ahead, step left.');
-    expect(nextGuidance('left', out({}), 'Chair')).toMatchObject({ text: 'Passed. Continue forward.', resume: true });
+    expect(nextGuidance('left', out({}), 'Chair')).toMatchObject({ text: null, resume: true }); // a chime, no words
   });
 
   it('nothing to say when nothing changed', () => {

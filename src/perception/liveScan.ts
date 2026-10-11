@@ -5,7 +5,7 @@ import type { GroundMap } from './ground';
 import type { Track } from './tracker';
 
 /**
- * "Scan around you" before walking, like Google Maps Live View's scan step:
+ * "Scan around you" before walking, like a live-view scan:
  * hold the phone up and turn slowly; EchoPath builds a 360-degree picture
  * (the walkable path's direction, things around you, leaves and steps on the
  * ground) and then says it in a few short sentences using clock positions,

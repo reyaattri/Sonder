@@ -85,6 +85,12 @@ export class AudioEngine {
   latencyMode: AudioContextLatencyCategory = 'interactive';
   /** Keep Bluetooth headphones awake with an inaudible signal (stops clipped first cues). */
   keepAlive = true;
+  /**
+   * The keep-alive only plays while guidance is actually running on Bluetooth
+   * headphones - never on menus, pause or wired output (it can be heard as a
+   * faint hiss on some headphones at high volume).
+   */
+  private keepAliveWanted = false;
   private keepAliveNode: AudioBufferSourceNode | null = null;
   private timer: number | undefined;
   private volume = 0.8;
@@ -280,7 +286,7 @@ export class AudioEngine {
     const dest = this.pingChain(pan < 0 ? 'left' : 'right');
     const t = ctx.currentTime;
     if (edgeWarning) {
-      // Project Guideline: a distinct high-pitched warning near the edge.
+      // The guide-line system: a distinct high-pitched warning near the edge.
       const w = ctx.createOscillator();
       w.type = 'square';
       w.frequency.value = 2800;
@@ -397,20 +403,26 @@ export class AudioEngine {
    */
   private startKeepAlive(): void {
     const ctx = this.ctx;
-    if (!ctx || !this.keepAlive || this.keepAliveNode) return;
+    if (!ctx || !this.keepAlive || !this.keepAliveWanted || this.keepAliveNode) return;
     const n = ctx.createBufferSource();
     n.buffer = this.noise;
     n.loop = true;
     const g = ctx.createGain();
-    g.gain.value = 0.00018;
+    g.gain.value = 0.00007; // about -83 dB
     n.connect(g).connect(ctx.destination);
     n.start();
     this.keepAliveNode = n;
   }
 
+  /** Guidance running on Bluetooth (true) or not (false): starts / stops the keep-alive. */
+  setKeepAliveWanted(on: boolean): void {
+    this.keepAliveWanted = on;
+    this.setKeepAlive(this.keepAlive);
+  }
+
   setKeepAlive(on: boolean): void {
     this.keepAlive = on;
-    if (!on) {
+    if (!on || !this.keepAliveWanted) {
       this.keepAliveNode?.stop();
       this.keepAliveNode = null;
     } else this.startKeepAlive();
@@ -506,7 +518,7 @@ export class AudioEngine {
     }
   }
 
-  /** Load Google Project Guideline's sound pack for this audio context. */
+  /** Load the guide-line system's sound pack for this audio context. */
   async loadPgSounds(base: string): Promise<boolean> {
     const ctx = this.ctx;
     if (!ctx) return false;
@@ -520,7 +532,7 @@ export class AudioEngine {
     return !!this.pg?.loaded && this.pgCtx === this.ctx;
   }
 
-  /** Drive the Project Guideline sounds (+ ear vibration) from a control signal. */
+  /** Drive the guide-line sounds (+ ear vibration) from a control signal. */
   pgUpdate(s: GuideSignal, rumble: number): void {
     if (this.ctx && this.pgReady) this.pg!.update(this.ctx, s, rumble);
   }

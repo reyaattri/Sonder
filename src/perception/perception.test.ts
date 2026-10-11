@@ -40,11 +40,11 @@ describe('geometry', () => {
     expect(bandOf(4)).toBe('mid');
     expect(bandOf(2)).toBe('near');
     expect(bandOf(1)).toBe('veryNear');
-    expect(pulseRateHz(10)).toBeCloseTo(0.8);
-    expect(pulseRateHz(5)).toBeCloseTo(0.8);
-    expect(pulseRateHz(3)).toBeCloseTo(2.4);
-    expect(pulseRateHz(1)).toBeCloseTo(4);
-    expect(pulseRateHz(0.3)).toBeCloseTo(4);
+    expect(pulseRateHz(10)).toBeCloseTo(0.6);
+    expect(pulseRateHz(5)).toBeCloseTo(0.6);
+    expect(pulseRateHz(3)).toBeCloseTo(1.8);
+    expect(pulseRateHz(1)).toBeCloseTo(3);
+    expect(pulseRateHz(0.3)).toBeCloseTo(3);
   });
 
   it('iou', () => {

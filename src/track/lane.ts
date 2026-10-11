@@ -13,14 +13,14 @@
  *    bottom row. Offset and heading follow from their positions.
  *
  * Course types: 'lanes' (two boundaries, running track), 'line' (run along a
- * single painted guide line, as in Google's Project Guideline, or a road
+ * single painted guide line, as in the open-source guide-line system, or a road
  * race's painted racing line) and 'edge' (keep a kerb/edge line on one side).
  * Paint colour: white, yellow, blue or any bright marking. Curvature of the
  * lines ahead gives early warning of bends.
  */
 
 export type CourseMode = 'lanes' | 'line' | 'edge';
-export type LineColor = 'white' | 'yellow' | 'blue' | 'purple' | 'any';
+export type LineColor = 'white' | 'yellow' | 'blue' | 'any';
 
 /** x = a*y + b in frame pixels. */
 export interface LineFit {
@@ -104,11 +104,6 @@ export function paintMask(rgba: Uint8ClampedArray, w: number, h: number, roiTop:
       if (!on && (color === 'yellow' || color === 'any')) {
         const hue = hueOf(r, g, b);
         on = hue >= 35 && hue <= 70 && satRel > 0.35 && luma[x] > mean * 0.9;
-      }
-      if (!on && color === 'purple') {
-        // Project Guideline's line paint (~RGB 144, 99, 205): violet hue.
-        const hue = hueOf(r, g, b);
-        on = hue >= 250 && hue <= 300 && satRel > 0.25;
       }
       if (!on && (color === 'blue' || color === 'any')) {
         const hue = hueOf(r, g, b);

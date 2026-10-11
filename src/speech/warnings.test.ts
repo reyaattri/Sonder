@@ -28,23 +28,27 @@ describe('spoken warnings', () => {
     expect(phrase('bicycle', 'center', 0.7)).toBe('Bicycle, center, about one second');
   });
 
-  it('only speaks under 4 s, high confidence, respecting verbosity', () => {
+  it('only speaks under 3 s, in your path (or a vehicle), high confidence, respecting verbosity', () => {
     const w = new WarningPolicy();
-    expect(w.update([t(1, 5)], 0, 'all')).toHaveLength(0);
-    expect(w.update([t(1, 3)], 0, 'all')).toHaveLength(1);
-    expect(w.update([t(1, 3)], 0, 'urgent')).toHaveLength(0);
-    expect(w.update([t(1, 2)], 0, 'urgent')).toHaveLength(1);
-    expect(w.update([t(1, 2)], 0, 'off')).toHaveLength(0);
-    expect(w.update([t(1, 2, { score: 0.4 })], 0, 'all')).toHaveLength(0);
-    expect(w.update([t(1, 2, { hits: 2 })], 0, 'all')).toHaveLength(0);
+    const c = { zone: 'center' as const };
+    expect(w.update([t(1, 3.5, c)], 0, 'all')).toHaveLength(0);
+    expect(w.update([t(1, 2.5, c)], 0, 'all')).toHaveLength(1);
+    expect(w.update([t(1, 2.5)], 0, 'all')).toHaveLength(0); // beside your path: heard, not spoken
+    expect(w.update([t(1, 2.5, { category: 'vehicle', label: 'car' })], 0, 'all')).toHaveLength(1);
+    expect(w.update([t(1, 2.7, c)], 0, 'urgent')).toHaveLength(0);
+    expect(w.update([t(1, 2, c)], 0, 'urgent')).toHaveLength(1);
+    expect(w.update([t(1, 2, c)], 0, 'off')).toHaveLength(0);
+    expect(w.update([t(1, 2, { ...c, score: 0.4 })], 0, 'all')).toHaveLength(0);
+    expect(w.update([t(1, 2, { ...c, hits: 2 })], 0, 'all')).toHaveLength(0);
   });
 
-  it('most urgent first, and no repeats for the same object within a few seconds', () => {
+  it('most urgent first, and each object is warned about once', () => {
     const w = new WarningPolicy();
-    const out = w.update([t(1, 3.5), t(2, 1.5)], 0, 'all');
+    const c = { zone: 'center' as const };
+    const out = w.update([t(1, 2.8, c), t(2, 1.5, c)], 0, 'all');
     expect(out.map((x) => x.trackId)).toEqual([2, 1]);
     w.markSpoken(2, 0);
-    expect(w.update([t(2, 1.2)], 3000, 'all')).toHaveLength(0);
-    expect(w.update([t(2, 1.2)], 7000, 'all')).toHaveLength(1);
+    expect(w.update([t(2, 1.2, c)], 3000, 'all')).toHaveLength(0);
+    expect(w.update([t(2, 1.2, c)], 60000, 'all')).toHaveLength(0);
   });
 });

@@ -6,10 +6,10 @@
  *  - 'stadium': a standard 400 m athletics track (World Athletics geometry:
  *    84.39 m straights, 36.5 m inner radius, eight 1.22 m lanes, 5 cm white
  *    lines on a red surface, grass infield). Runs counter-clockwise.
- *  - 'road': a road with a painted yellow guide line (Project Guideline-style)
+ *  - 'road': a road with a painted yellow guide line (guide-line style)
  *    that bends gently left and right, white kerb lines 3 m either side.
  */
-export type CourseId = 'stadium' | 'road' | 'purple';
+export type CourseId = 'stadium' | 'road';
 
 export const LANE_W = 1.22;
 export const LINE_W = 0.05;
@@ -17,7 +17,7 @@ const STRAIGHT = 84.39;
 const R0 = 36.5;
 const HALF = STRAIGHT / 2;
 
-export type Paint = 'white' | 'yellow' | 'purple' | 'track' | 'road' | 'grass';
+export type Paint = 'white' | 'yellow' | 'track' | 'road' | 'grass';
 
 export interface Course {
   id: CourseId;
@@ -73,15 +73,15 @@ const ROAD_L = 70;
 export const roadLineY = (x: number) => ROAD_A * Math.sin((2 * Math.PI * x) / ROAD_L);
 const roadSlope = (x: number) => ROAD_A * ((2 * Math.PI) / ROAD_L) * Math.cos((2 * Math.PI * x) / ROAD_L);
 
-/** `guide`: paint of the guide line (yellow racing line, or Project Guideline's purple). */
-export function road(guide: 'yellow' | 'purple' = 'yellow'): Course {
+/** A road with a painted yellow guide line (a road race's racing line). */
+export function road(): Course {
   return {
     id: 'road',
     lane: 0,
     paintAt(x, y) {
       // Perpendicular-ish distance to the guide line (good for gentle bends).
       const d = (y - roadLineY(x)) / Math.sqrt(1 + roadSlope(x) ** 2);
-      if (Math.abs(d) < 0.06) return guide; // 12 cm painted line
+      if (Math.abs(d) < 0.06) return 'yellow'; // 12 cm painted line
       if (Math.abs(Math.abs(d) - 3) < 0.05) return 'white';
       if (Math.abs(d) > 3.6) return 'grass';
       return 'road';

@@ -19,3 +19,10 @@ describe('settings migration', () => {
     expect(s.looming).toBe(false);
   });
 });
+
+describe('v7: purple guide line removed', () => {
+  it('a saved purple line colour becomes yellow', () => {
+    const raw = { settingsVersion: 6, lineColor: 'purple' } as unknown as Partial<Settings>;
+    expect(migrate({ ...DEFAULT_SETTINGS, ...raw } as Settings, raw).lineColor).toBe('yellow');
+  });
+});

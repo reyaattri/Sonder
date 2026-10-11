@@ -12,7 +12,7 @@ export interface Warning {
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five'];
 const MIN_SCORE = 0.6;
 const MIN_HITS = 5;
-const SPEAK_TTC_S = 4;
+const SPEAK_TTC_S = 3;
 const URGENT_TTC_S = 2.5;
 const REPEAT_MS = 6000;
 
@@ -41,6 +41,10 @@ export class WarningPolicy {
     for (const t of tracks) {
       if (!t.confirmed || t.hits < MIN_HITS || t.score < MIN_SCORE) continue;
       if (!(t.ttc < SPEAK_TTC_S)) continue;
+      // Things beside your path are heard, not spoken about; vehicles always count.
+      if (t.zone !== 'center' && t.category !== 'vehicle') continue;
+      // One warning per object.
+      if (this.lastSpoken.has(t.id)) continue;
       if (verbosity === 'urgent' && !(t.ttc < URGENT_TTC_S || t.band === 'veryNear')) continue;
       const last = this.lastSpoken.get(t.id);
       if (last !== undefined && now - last < REPEAT_MS) continue;

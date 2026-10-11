@@ -40,16 +40,14 @@ export type Intent =
   | 'pause'
   | 'resume'
   | 'stop'
-  | 'stats'
-  | 'photo';
+  | 'stats';
 
 const WORDS: [Intent, string[]][] = [
   // Multi-word phrases first (they win over single words).
   ['describe', ["what's around me", 'whats around me', 'what is around me', 'what is around', "what's around", 'describe', 'what do you see', 'what can you see', "what's ahead", 'what is ahead', 'whats ahead']],
   ['scan', ['scan around me', 'scan again', 'scan', 'look around', 'rescan']],
   ['live', ['live view', 'live mode', 'live', 'real world', 'use the camera', 'camera']],
-  ['photo', ['real photo', 'photo', 'picture', 'google photo']],
-  ['stats', ['my stats', 'stats', 'statistics', 'my pace', 'pace', 'how far', 'distance', 'heart rate', 'how am i doing']],
+  ['stats', ['my stats', 'stats', 'statistics', 'my pace', 'pace', 'how far', 'distance', 'how am i doing']],
   ['resume', ['resume', 'continue', 'carry on', 'unpause', 'keep going']],
   ['pause', ['pause', 'hold on', 'wait']],
   ['stop', ['stop', 'end', 'finish', 'quit', 'stop guidance']],

@@ -83,18 +83,18 @@ export interface Settings {
   // ---- Track mode -------------------------------------------------------
   /**
    * Course: 'lanes' = two lane lines (running track), 'line' = run along one
-   * painted guide line (Project Guideline-style / a road race's racing line),
+   * painted guide line (guide-line style / a road race's racing line),
    * 'edge' = keep a kerb or edge line on one side (road races).
    */
   trackCourse: 'lanes' | 'line' | 'edge';
   /** Paint colour of the line(s) to follow. */
-  lineColor: 'white' | 'yellow' | 'blue' | 'purple' | 'any';
+  lineColor: 'white' | 'yellow' | 'blue' | 'any';
   /** 'edge' course: which side the kerb/edge line stays on. */
   edgeSide: 'left' | 'right';
   /**
    * Drift feedback style:
    *  'rumble'    - clicks from the line you're drifting onto (like a rumble strip)
-   *  'guideline' - Google Project Guideline-style: beeps on the side to steer
+   *  'guideline' - guide-line style: beeps on the side to steer
    *                toward, faster with drift, high warning at the edge
    *  'tone'      - one continuous quiet tone; drifting moves it to the line's
    *                side and makes it louder and dissonant
@@ -112,8 +112,6 @@ export interface Settings {
   targetPaceS: number;
   /** Cadence metronome, steps per minute (0 = off). */
   metronomeSpm: number;
-  /** Maximum heart rate for zone announcements (0 = off). */
-  hrMax: number;
   /** "3, 2, 1, go" before guidance starts. */
   trackCountdown: boolean;
   /** Phone vibration on drift (Android; iPhones have no web vibration). */
@@ -125,8 +123,6 @@ export interface Settings {
   lapMeters: number;
   /** Running step length in metres, used for distance when GPS is unavailable. */
   runStepLength: number;
-  /** Warn when heart rate goes above this (0 = off). */
-  maxHeartRate: number;
   /** Also warn about runners/people directly ahead in the lane. */
   trackObstacles: boolean;
   /** Fraction of lane width you can drift from center before any cue. */
@@ -137,7 +133,7 @@ export interface Settings {
   settingsVersion: number;
 }
 
-export const SETTINGS_VERSION = 6;
+export const SETTINGS_VERSION = 8;
 
 export type Mount = 'chest' | 'waist' | 'hand' | 'table';
 export type Activity = 'walk' | 'track';
@@ -170,7 +166,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mount: 'chest',
   spatialSpread: 2.2,
   heartbeat: false,
-  soundScene: 'surround',
+  soundScene: 'cues',
   sceneLevel: 0.5,
   depthCane: true,
   echoEverySec: 0,
@@ -182,19 +178,17 @@ export const DEFAULT_SETTINGS: Settings = {
   edgeSide: 'left',
   trackStyle: 'pg',
   earVibration: 0.5,
-  runBeacon: true,
+  runBeacon: false,
   mountHeight: 1.3,
   edgeGap: 0.6,
   targetPaceS: 0,
   metronomeSpm: 0,
-  hrMax: 0,
   trackCountdown: true,
   trackHaptics: true,
   trackAnnounce: 'lap',
   trackAnnounceMinutes: 2,
   lapMeters: 400,
   runStepLength: 1.1,
-  maxHeartRate: 0,
   trackObstacles: true,
   trackDeadband: 0.12,
   disclaimerAccepted: false,
@@ -247,9 +241,21 @@ export function migrate(s: Settings, raw: Partial<Settings>): Settings {
     if (!raw.trackStyle || raw.trackStyle === 'rumble') s.trackStyle = 'glide';
   }
   if ((raw.settingsVersion ?? 1) < 6) {
-    // v6: Google Project Guideline's own sounds are the default.
+    // v6: the guide-line system's own sounds are the default.
     if (!raw.trackStyle || raw.trackStyle === 'glide' || raw.trackStyle === 'rumble') s.trackStyle = 'pg';
   }
+  // v7: the purple guide-line option was removed; a saved purple becomes yellow.
+  if ((s.lineColor as string) === 'purple') s.lineColor = 'yellow';
+  // v8: calm by default - no constant sounds. Surround presences and the run
+  // beacon play all the time, so they are off; cues are calm.
+  if ((raw.settingsVersion ?? 1) < 8) {
+    s.soundScene = 'cues';
+    s.runBeacon = false;
+    s.cueDensity = 'calm';
+  }
+  // v7: heart-rate features removed.
+  delete (s as unknown as Record<string, unknown>).hrMax;
+  delete (s as unknown as Record<string, unknown>).maxHeartRate;
   s.settingsVersion = SETTINGS_VERSION;
   return s;
 }

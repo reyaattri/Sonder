@@ -81,11 +81,12 @@ export type CueDensity = 'calm' | 'normal' | 'detailed';
  */
 export const DENSITY: Record<
   CueDensity,
-  { burstMs: number; minRecueMs: number; maxDistance: number; sideStaticMax: number; recueOnZoneChange: boolean }
+  { burstMs: number; minRecueMs: number; maxDistance: number; sideStaticMax: number; recueOnZoneChange: boolean; quietSides: boolean }
 > = {
-  calm: { burstMs: 900, minRecueMs: 4000, maxDistance: 4.5, sideStaticMax: 1.8, recueOnZoneChange: false },
-  normal: { burstMs: 1100, minRecueMs: 2500, maxDistance: 6, sideStaticMax: 3, recueOnZoneChange: true },
-  detailed: { burstMs: 1400, minRecueMs: 0, maxDistance: Infinity, sideStaticMax: Infinity, recueOnZoneChange: true },
+  // Calm: nothing sounds unless it is in your path within 3.5 m, or coming at you.
+  calm: { burstMs: 800, minRecueMs: 5000, maxDistance: 3.5, sideStaticMax: 0, recueOnZoneChange: false, quietSides: true },
+  normal: { burstMs: 1100, minRecueMs: 2500, maxDistance: 6, sideStaticMax: 3, recueOnZoneChange: true, quietSides: false },
+  detailed: { burstMs: 1400, minRecueMs: 0, maxDistance: Infinity, sideStaticMax: Infinity, recueOnZoneChange: true, quietSides: false },
 };
 
 interface TrackCueState {
@@ -290,7 +291,10 @@ export class CuePolicy {
       if (t.id === blockerId) continue; // already represented by the buzz
       // Gating: far objects, and static things beside the path, stay quiet.
       const inRange = t.distance <= budget.maxDistance;
-      const sideStatic = t.category === 'static' && t.zone !== 'center' && t.distance > budget.sideStaticMax;
+      // Beside your path and not coming at you: heard in calm mode only if it approaches.
+      const sideStatic =
+        (t.category === 'static' && t.zone !== 'center' && t.distance > budget.sideStaticMax) ||
+        (budget.quietSides && t.zone !== 'center' && !(t.approaching && t.ttc < 4) && explained?.id !== t.id);
       let st = this.state.get(t.id);
       if (!st && (!inRange || sideStatic)) continue;
       let triggered = false;

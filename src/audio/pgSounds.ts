@@ -1,5 +1,5 @@
 /**
- * Google Project Guideline's sound design, ported to Web Audio, using its
+ * The guide-line system's sound design, ported to Web Audio, using its
  * recorded sound pack (Apache-2.0, downloaded into /sounds/pg by the asset
  * script). Mirrors project_guideline/audio/legacy_sound_pack.cc:
  *
@@ -43,14 +43,20 @@ const MAX_ROTATION_DEG = 45;
 const SENSITIVITY = 0.4;
 const WARNING_M = 1.5;
 const WARNING_START = 0.4;
-const TURN_SENSITIVITY = 0.4;
+const TURN_SENSITIVITY = 0.5;
+/**
+ * Calm: the steering sound is SILENT until the correction is real (the
+ * original design ticks quietly even on the line), then fades in.
+ */
+const STEER_QUIET = 0.12;
+const STEER_FULL = 0.45;
 
 const lerp = (x: number, x0: number, x1: number, y0: number, y1: number, gamma = 1) => {
   const t = Math.max(0, Math.min(1, (x - x0) / (x1 - x0)));
   return y0 + (y1 - y0) * Math.pow(t, gamma);
 };
 
-/** Project Guideline's ApplyShaping: piecewise-linear S-curve that keeps small inputs small. */
+/** The guide-line system's ApplyShaping: piecewise-linear S-curve that keeps small inputs small. */
 export function applyShaping(x: number, curvature = SENSITIVITY): number {
   if (curvature === 0) return x;
   const mid = lerp(curvature, 0, 1, 0.5, 0.01);
@@ -98,7 +104,7 @@ export class PgSoundPack {
         }),
       );
     } catch (e) {
-      console.warn('[EchoPath] Project Guideline sounds unavailable:', e);
+      console.warn('[EchoPath] guide-line sounds unavailable:', e);
       return false;
     }
     this.bus = ctx.createGain();
@@ -185,14 +191,15 @@ export class PgSoundPack {
     this.set('obstacle', off, 1, t);
     const steer = applyShaping(Math.max(-1, Math.min(1, s.steerDeg / MAX_ROTATION_DEG)));
     const sp = steerPan(steer);
-    this.set('steering', sp, lerp(Math.abs(steer), 0, 1, 1, 1.6, 2), t);
+    const sv = lerp(Math.abs(steer), STEER_QUIET, STEER_FULL, 0, 1);
+    this.set('steering', [sp[0] * sv, sp[1] * sv], lerp(Math.abs(steer), 0, 1, 1, 1.6, 2), t);
     const warn = applyShaping(Math.max(-1, Math.min(1, s.lateralM / WARNING_M)));
     this.set('warning', warningPan(warn), lerp(Math.abs(warn), WARNING_START, 1, 1, 2, 2), t);
     const turn = applyShaping(Math.max(-1, Math.min(1, s.turnAheadDeg / MAX_ROTATION_DEG)));
-    const tv = lerp(Math.abs(turn), TURN_SENSITIVITY, 1, 0, 0.8);
+    const tv = lerp(Math.abs(turn), TURN_SENSITIVITY, 1, 0, 0.5);
     this.set('turn', [turn < 0 ? tv : 0, turn > 0 ? tv : 0], 1, t);
     // Ear vibration follows the steering side, only once the correction is real.
-    const k = lerp(Math.abs(steer), 0.15, 1, 0, rumbleLevel);
+    const k = lerp(Math.abs(steer), 0.2, 1, 0, rumbleLevel);
     this.rumble!.l.gain.setTargetAtTime(steer < 0 ? k : 0, t, 0.06);
     this.rumble!.r.gain.setTargetAtTime(steer > 0 ? k : 0, t, 0.06);
   }

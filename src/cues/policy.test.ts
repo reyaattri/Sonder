@@ -121,13 +121,18 @@ describe('cue policy', () => {
 describe('calm cue density (everyday walking)', () => {
   const calm = { ...cfg, density: 'calm' as const };
 
-  it('ignores objects beyond 4.5 m and static things beside the path', () => {
+  it('silent unless something is in your path within 3.5 m, or coming at you', () => {
     const p = new CuePolicy();
-    expect(p.update([track(1, { distance: 5.5 })], 0, calm).sources).toHaveLength(0);
+    expect(p.update([track(1, { zone: 'center', distance: 4.5 })], 0, calm).sources).toHaveLength(0);
     const sideChair = track(2, { category: 'static', label: 'chair', zone: 'left', distance: 2.5 });
     expect(p.update([sideChair], 0, calm).sources).toHaveLength(0);
-    // ...but the same person cues once they come within range
-    expect(p.update([track(1, { distance: 4 })], 100, calm).sources[0]?.triggered).toBe(true);
+    // Someone beside you who is NOT coming at you: silent.
+    expect(p.update([track(3, { zone: 'left', distance: 2.5 })], 0, calm).sources).toHaveLength(0);
+    // ...but they sound once they approach
+    const coming = { ...track(3, { zone: 'left', distance: 2.4 }), ttc: 2.5, approaching: true };
+    expect(p.update([coming], 100, calm).sources[0]?.triggered).toBe(true);
+    // ...and the person ahead cues once they come within range
+    expect(p.update([track(1, { zone: 'center', distance: 3 })], 200, calm).sources.some((s) => s.trackId === 1 && s.triggered)).toBe(true);
   });
 
   it('a person walking across does not re-cue on every zone change', () => {
@@ -139,10 +144,12 @@ describe('calm cue density (everyday walking)', () => {
 
   it('getting closer re-cues only after the minimum gap, but becoming very near is urgent', () => {
     const p = new CuePolicy();
-    p.update([track(1, { distance: 4.2 })], 0, calm);
-    expect(p.update([track(1, { distance: 2.5 })], 2000, calm).sources.some((s) => s.triggered)).toBe(false);
-    expect(p.update([track(1, { distance: 2.4 })], 4100, calm).sources[0]?.triggered).toBe(true);
-    expect(p.update([track(1, { distance: 1.2 })], 5400, calm).sources[0]?.triggered).toBe(true);
+    const c = { zone: 'center' as const };
+    p.update([track(1, { ...c, distance: 3.4 })], 0, calm);
+    expect(p.update([track(1, { ...c, distance: 2.5 })], 2000, calm).sources.some((s) => s.triggered)).toBe(false);
+    expect(p.update([track(1, { ...c, distance: 2.2 })], 5100, calm).sources.some((s) => s.trackId === 1 && s.triggered)).toBe(true);
+    // Very near in your path: the blocked-path sound takes over.
+    expect(p.update([track(1, { ...c, distance: 1.2 })], 6400, calm).blocked).toBe(true);
   });
 });
 

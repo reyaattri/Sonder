@@ -622,9 +622,6 @@ select {
 .activities button[aria-checked='true'] .act-desc {
   color: var(--on-accent);
 }
-#btn-hr {
-  margin-top: 10px;
-}
 input[type='number'] {
   font: inherit;
   min-height: 52px;
@@ -743,6 +740,7 @@ input[type='number'] {
 .sim-controls select {
   min-height: 56px;
 }
+#sim-demo[aria-pressed='true'],
 #sim-auto[aria-pressed='true'],
 #wsim-auto[aria-pressed='true'] {
   background: var(--accent);
@@ -848,6 +846,7 @@ input[type='number'] {
 /* Live view: same panel as the simulator, without the sim controls. */
 .sim.live .sim-controls,
 .sim.live #wsim-scene,
+.sim.live #sim-demo,
 .sim.live:not(.real) .sim-truth {
   display: none;
 }

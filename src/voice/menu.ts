@@ -40,7 +40,7 @@ export interface MenuDeps {
   startSimulator: () => void;
   /** Live camera: scan around you, then walk. */
   startLiveWalk: () => void;
-  /** Any practice scene from the dropdown (walk, stadium, road, purple, pg-photo, photo-walk). */
+  /** A practice scene from the dropdown (walk, stadium, road). */
   startScene: (scene: string) => void;
   soundCheck: () => Promise<void>;
   render: (step: MenuStep, highlighted: number, heard: string) => void;
@@ -88,7 +88,7 @@ export class VoiceMenu {
             },
           },
           { label: 'Run on a track', intents: ['run', 'lanes'], run: () => (d.update({ activity: 'track' }), this.open('course')) },
-          { label: 'Practice', intents: ['simulator', 'photo'], run: go('practice') },
+          { label: 'Practice', intents: ['simulator'], run: go('practice') },
           { label: 'Sound check', intents: ['sound'], run: () => this.soundCheck() },
           { label: 'Settings', intents: ['settings'], run: go('settings') },
         ],
@@ -159,12 +159,11 @@ export class VoiceMenu {
       practice: {
         id: 'practice',
         title: 'Practice',
-        prompt: 'Practice. Walk simulator, track simulator, purple line, or real photo.',
+        prompt: 'Practice. Walk simulator, track simulator, or road with a guide line.',
         options: [
           { label: 'Walk simulator: obstacles and people', intents: ['walk'], run: () => (this.close(), d.startScene('walk')) },
           { label: 'Track simulator: 400 metre track', intents: ['run', 'lanes'], run: () => (this.close(), d.startScene('stadium')) },
-          { label: 'Purple guide line, Google model', intents: ['line'], run: () => (this.close(), d.startScene('purple')) },
-          { label: 'Real photo from Google Project Guideline', intents: ['photo', 'live'], run: () => (this.close(), d.startScene('photo-walk')) },
+          { label: 'Road with a yellow guide line', intents: ['line'], run: () => (this.close(), d.startScene('road')) },
           { label: 'Back', intents: ['done'], run: () => this.back() },
         ],
       },

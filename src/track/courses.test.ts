@@ -38,7 +38,7 @@ const WHITE: [number, number, number] = [240, 240, 240];
 const opts = { roiTop: 0.45 };
 
 describe('course types', () => {
-  it("'line' course (Project Guideline / road racing line): yellow line under you = centred", () => {
+  it("'line' course (the guide-line system / road racing line): yellow line under you = centred", () => {
     const m = measureLane(road([{ x: straight(cx), rgb: YELLOW, width: 2 }]), W, H, { ...opts, mode: 'line', color: 'yellow' });
     expect(m.offset!).toBeCloseTo(0, 1);
     expect(m.confidence).toBeGreaterThan(0.5);

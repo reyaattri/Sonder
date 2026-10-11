@@ -14,11 +14,11 @@ export interface GuidanceSpeech {
 /**
  * Spoken guidance as a small state machine:
  *
- *   blocked, no way around   -> "Person ahead. No clear way around on the path. Stop or wait."
+ *   blocked, no way around   -> "Person ahead. No way around. Stop."
  *   ...then a side opens     -> "Way around opened. Step left."
- *   ...or the blockage goes  -> "The way ahead has opened. Continue forward, carefully."
+ *   ...or the blockage goes  -> "Way opened. Go ahead carefully."
  *   blocked, step left       -> "Person ahead, step left."
- *   ...then you're past it   -> "Passed. Continue forward."
+ *   ...then you're past it   -> (no words: the "opened" chime)
  *   unexplained looming side -> "Something coming from the left."
  *
  * Never says the way is "clear" or "safe": only that the blockage it saw is gone.
@@ -27,7 +27,7 @@ export function nextGuidance(prev: GuidanceKey, p: PolicyOutput, what: string): 
   if (p.blocked && p.noWayAround) {
     return prev === 'none'
       ? { key: 'none', text: null, resume: false }
-      : { key: 'none', text: `${what} ahead. No clear way around on the path. Stop or wait.`, resume: false };
+      : { key: 'none', text: `${what} ahead. No way around. Stop.`, resume: false };
   }
   if (p.blocked && p.guideSide) {
     if (prev === p.guideSide) return { key: prev, text: null, resume: false };
@@ -35,8 +35,8 @@ export function nextGuidance(prev: GuidanceKey, p: PolicyOutput, what: string): 
     return { key: p.guideSide, text: `${what} ahead, step ${p.guideSide}.`, resume: false };
   }
   if (!p.blocked) {
-    if (prev === 'none') return { key: null, text: 'The way ahead has opened. Continue forward, carefully.', resume: true };
-    if (prev === 'left' || prev === 'right') return { key: null, text: 'Passed. Continue forward.', resume: true };
+    if (prev === 'none') return { key: null, text: 'Way opened. Go ahead carefully.', resume: true };
+    if (prev === 'left' || prev === 'right') return { key: null, text: null, resume: true };
   }
   if (p.unexplainedLooming && p.unexplainedLooming !== 'center') {
     const key = `loom-${p.unexplainedLooming}` as const;

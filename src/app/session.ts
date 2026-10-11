@@ -12,10 +12,13 @@ import { pathDebris, PathEstimator, type PathModel } from '../perception/freespa
 import { classInfo } from '../perception/classes';
 import { nextGuidance, type GuidanceKey } from '../cues/guidance';
 import { SceneMemory } from '../perception/sceneMemory';
+import { TalkPolicy, type TalkKind } from '../speech/talkPolicy';
 import { groundMap, type GroundMap } from '../perception/ground';
 import { LiveScan } from '../perception/liveScan';
 import type { DepthClient } from '../depth/client';
-import { alignToGround, occupancy, type Occupancy } from '../depth/metric';
+import { alignToGround, boxDistance, occupancy, type Alignment, type DepthMap, type Occupancy } from '../depth/metric';
+import type { CameraModel } from '../track/world';
+import { bandOf } from '../perception/geometry';
 import { effectiveFov as effFov } from '../perception/geometry';
 import { Tracker, type Track } from '../perception/tracker';
 import { filterDetections, zonePan } from '../perception/zones';
@@ -64,7 +67,6 @@ const QUALITY_HOLD_MS = 2000;
 const QUALITY_REPEAT_MS = 20000;
 /** One small frame per camera frame feeds the looming, path and light checks. */
 const THUMB_W = 80;
-const GUIDE_SPEECH_GAP_MS = 4000;
 const HEARTBEAT_MS = 6000;
 const TILT_HOLD_MS = 3000;
 const TILT_REPEAT_MS = 30000;
@@ -99,7 +101,7 @@ export class Session {
   depthClient: DepthClient | null = null;
   private depthCanvas: OffscreenCanvas | HTMLCanvasElement =
     typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(196, 252) : document.createElement('canvas');
-  private depthState: { occ: Occupancy; at: number } | null = null;
+  private depthState: { occ: Occupancy; at: number; dm: DepthMap; al: Alignment; cam: CameraModel } | null = null;
   private lastDepthAt = -Infinity;
   private lastEcho = 0;
   private lastHeadSaid = -Infinity;
@@ -118,7 +120,8 @@ export class Session {
   readonly scan = new LiveScan();
   onScanDone: ((lines: string[]) => void) | null = null;
   private lastGuideSaid: GuidanceKey = null;
-  private lastGuideSpeech = -Infinity;
+  /** Decides what is worth saying (see speech/talkPolicy.ts). */
+  private talk = new TalkPolicy();
   private governor: QualityGovernor;
   private grab: OffscreenCanvas | HTMLCanvasElement;
   private thumb: HTMLCanvasElement;
@@ -196,6 +199,7 @@ export class Session {
     this.tracker.reset();
     this.policy.reset();
     this.warnings.reset();
+    this.talk.reset();
     this.lgmd.reset();
     this.pathEst.reset();
     this.scene.reset();
@@ -411,6 +415,20 @@ export class Session {
       void this.runDepth(video, s);
     }
     const depth = this.depthState && captureT - this.depthState.at < 700 ? this.depthState.occ : null;
+    // Depth-measured distances for detected objects (fresh depth only): box
+    // size assumes a standard height, depth doesn't. Partly visible objects
+    // (cut off by the frame) use depth alone; others average the two.
+    if (this.depthState && captureT - this.depthState.at < 400 && this.depthQuality >= 0.5) {
+      const ds = this.depthState;
+      for (const t of tracks) {
+        if (!t.confirmed) continue;
+        const dz = boxDistance(ds.dm, ds.cam, ds.al, t.box);
+        if (dz === null || !(dz > 0.3 && dz < 15)) continue;
+        const clipped = t.box.y < 0.02 || t.box.y + t.box.h > 0.98;
+        t.distance = clipped ? dz : 0.5 * t.distance + 0.5 * dz;
+        t.band = bandOf(t.distance);
+      }
+    }
 
     // Walkable path, with detected objects masked out of it.
     // Mask live detections AND tracked objects (a just-vanished detection must
@@ -464,9 +482,9 @@ export class Session {
       this.speakGuidance(policy, tracks, captureT);
       // Someone ahead walking your way: say it once per person, no STOP.
       const pace = policy.pacing;
-      if (pace && pace.trackId !== this.lastPacingId && !policy.blocked && s.verbosity !== 'off') {
+      if (pace && pace.trackId !== this.lastPacingId && !policy.blocked) {
         this.lastPacingId = pace.trackId;
-        this.announcer.say(`Person ahead, walking your way.${pace.side ? ` Pass on the ${pace.side}.` : ' Follow behind.'}`, { system: false, priority: 1 });
+        this.sayIf('info', `Person ahead, walking your way.${pace.side ? ` Pass on the ${pace.side}.` : ''}`, captureT);
       }
     }
     const looming = policy.unexplainedLooming !== null;
@@ -505,16 +523,19 @@ export class Session {
     }
 
     // --- Spoken warnings (V2) ---------------------------------------------------
-    if (s.verbosity !== 'off' && this.announcer.ready) {
+    // While blocked, the step-around guidance does the talking.
+    if (s.verbosity !== 'off' && this.announcer.ready && !policy.blocked && !this.scan.active) {
       const [w0] = this.warnings.update(tracks, captureT, s.verbosity);
       if (w0) {
         const tr = tracks.find((t) => t.id === w0.trackId);
-        if (this.announcer.supported) this.announcer.say(w0.text, { system: false, priority: 1 + w0.ttc });
-        // No on-device voice: a distinct "approaching" sound from that side instead.
-        else this.audio.earcon('approach', tr ? zonePan(tr.zone) : 0);
-        this.lastSoundAt = now;
-        this.warnings.markSpoken(w0.trackId, captureT);
-        this.log.push({ t: Math.round(captureT - this.startedAt), type: 'speech', text: w0.text, ttc: w0.ttc });
+        if (!this.announcer.supported) {
+          // No on-device voice: a distinct "approaching" sound from that side instead.
+          this.audio.earcon('approach', tr ? zonePan(tr.zone) : 0);
+          this.warnings.markSpoken(w0.trackId, captureT);
+        } else if (this.sayIf('warn', w0.text, captureT, 1 + w0.ttc)) {
+          this.lastSoundAt = now;
+          this.warnings.markSpoken(w0.trackId, captureT);
+        }
       }
     }
 
@@ -613,16 +634,34 @@ export class Session {
     const what = blocker ? (classInfo(blocker.label)?.spoken ?? 'Something') : 'Something';
     const g = nextGuidance(this.lastGuideSaid, p, what);
     if (!g.text) {
+      // Past it: a soft chime instead of words.
+      if (g.resume) this.audio.earcon('opened');
       this.lastGuideSaid = g.key;
       return;
     }
-    const gap = g.resume ? 1000 : GUIDE_SPEECH_GAP_MS;
-    if (now - this.lastGuideSpeech < gap) return; // try again next frame
+    const kind: TalkKind = g.key === 'none' ? 'stop' : g.resume ? 'resume' : g.key?.startsWith('loom-') ? 'warn' : 'steer';
+    if (this.settings.verbosity === 'off') {
+      this.lastGuideSaid = g.key;
+      return;
+    }
+    if (!this.sayIf(kind, g.text, now, 0)) {
+      // A "way opened" that isn't worth words still gets its chime.
+      if (kind === 'resume') {
+        this.audio.earcon('opened');
+        this.lastGuideSaid = g.key;
+      }
+      return; // otherwise try again next frame
+    }
     this.lastGuideSaid = g.key;
-    this.lastGuideSpeech = now;
     if (g.resume) this.audio.earcon('opened');
-    if (this.settings.verbosity !== 'off') this.announcer.say(g.text, { system: false, priority: 0 });
-    this.log.push({ t: Math.round(now - this.startedAt), type: 'speech', text: g.text });
+  }
+
+  /** Speak through the talk policy; true if it was said. */
+  private sayIf(kind: TalkKind, text: string, now: number, priority = 1): boolean {
+    if (this.settings.verbosity === 'off' || !this.talk.allow(kind, text, now)) return false;
+    this.announcer.say(text, { system: false, priority, interrupt: kind === 'stop' || kind === 'steer' || kind === 'resume' });
+    this.log.push({ t: Math.round(now - this.startedAt), type: 'speech', text });
+    return true;
   }
 
   /** Depth frame -> metric alignment (via the ground) -> occupancy. */
@@ -657,7 +696,7 @@ export class Session {
       this.depthState = null;
       return;
     }
-    this.depthState = { occ: occupancy(dm, cam, al), at: performance.now() };
+    this.depthState = { occ: occupancy(dm, cam, al), at: performance.now(), dm, al, cam };
   }
 
   /** Virtual cane tone, head-height warnings and echolocation clicks. */
@@ -670,9 +709,8 @@ export class Session {
     if (s.depthCane && target && this.caneFrames >= 3) {
       this.audio.setCane({ active: true, distance: target.z, azimuth: Math.atan2(target.x, target.z), head: target === head });
       if (head && head.z < 2.5 && now - this.lastHeadSaid > 6000) {
-        this.lastHeadSaid = now;
-        if (this.settings.verbosity !== 'off')
-          this.announcer.say(`Head height obstacle ahead, ${Math.max(1, Math.round(head.z))} metres.`, { system: false, priority: 0 });
+        // Close: urgent. Further: a note.
+        if (this.sayIf(head.z < 1.5 ? 'stop' : 'info', head.z < 1.5 ? 'Duck. Head height, ahead.' : 'Head height obstacle ahead.', now, 0)) this.lastHeadSaid = now;
       }
     } else {
       this.audio.setCane({ active: false, distance: 9, azimuth: 0, head: false });
@@ -693,11 +731,11 @@ export class Session {
     // Leaf litter on the path ahead: a short note when it first appears (persisting ~6 frames), then quiet.
     const g = this.groundState;
     this.leafFrames = g && g.corridor > 0.15 ? this.leafFrames + 1 : 0;
-    if (this.leafFrames === 6 && now - this.lastLeavesSaid > 30000 && this.settings.verbosity !== 'off') {
+    if (this.leafFrames === 6 && now - this.lastLeavesSaid > 30000) {
       this.lastLeavesSaid = now;
       const x = g!.aheadX ?? 0.5;
       this.audio.groundCue((x - 0.5) * 1.1);
-      this.announcer.say(`Leaves on the path${x < 0.42 ? ' ahead on the left' : x > 0.58 ? ' ahead on the right' : ' ahead'}. Could be slippery.`, { system: false, priority: 1 });
+      this.sayIf('info', 'Leaves on the path. Could be slippery.', now);
     }
     const rock = depth?.low ?? null;
     const debris = rock ? null : pathDebris(path);
@@ -711,13 +749,11 @@ export class Session {
       this.lastHazardCue = now;
       this.audio.groundCue(az);
     }
-    if (now - this.lastHazardSaid > 12000 && this.settings.verbosity !== 'off') {
-      this.lastHazardSaid = now;
-      const side = Math.abs(az) < 0.15 ? 'ahead' : az < 0 ? 'ahead on the left' : 'ahead on the right';
-      this.announcer.say(
-        rock ? `Step or rock ${side}, about ${Math.max(1, Math.round(rock.z))} metres.` : `Something on the ground ${side}.`,
-        { system: false, priority: 1 },
-      );
+    // Only depth-measured bumps are worth words; flat look-alikes (shadows,
+    // markings, manhole covers) get just the ground sound.
+    if (rock && now - this.lastHazardSaid > 12000) {
+      const side = Math.abs(az) < 0.15 ? 'ahead' : az < 0 ? 'ahead, left' : 'ahead, right';
+      if (this.sayIf('info', `Step or rock ${side}.`, now)) this.lastHazardSaid = now;
     }
   }
 

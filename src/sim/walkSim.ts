@@ -94,14 +94,14 @@ function rng(seed: number): () => number {
 
 /**
  * Real-time WALK simulator: a park path with real-world street furniture
- * (lamp posts, bollards, bins, cones, Project Guideline-style traffic
+ * (lamp posts, bollards, bins, cones, guide-line style traffic
  * barrels, benches, sign plates at head height, rocks, fallen leaves) and
  * people (oncoming walkers who sidestep you as real people do, slower
  * walkers ahead, people crossing). Rendered from a chest camera into a
  * canvas whose stream feeds EchoPath's REAL walk pipeline: object detector,
  * Depth Anything virtual cane, path model, looming, cue policy, speech.
  *
- * Project Guideline's own Unreal simulator does not support obstacles yet
+ * The guide-line system's own Unreal simulator does not support obstacles yet
  * (their README); this one is built for exactly that.
  *
  * The autopilot is a blind walker: it walks straight with a little wander,
@@ -650,7 +650,7 @@ function drawObstacle(g: CanvasRenderingContext2D, o: Obstacle, xr: number, z: n
       ]);
       break;
     case 'barrel':
-      // Like the barrel in Project Guideline's obstacle test frame.
+      // Like the barrel in the guide-line system's obstacle test frame.
       solid(g, xr, z, 0, 0.06, o.w * 1.3, o.w * 1.3, cam, f, [25, 25, 25]);
       solid(g, xr, z, 0.06, o.h, o.w, o.w * 0.92, cam, f, ORANGE, [
         { from: 0.35, to: 0.47, colour: WHITE },

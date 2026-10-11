@@ -63,12 +63,6 @@ export class GpsDistance {
   }
 }
 
-/** Bluetooth Heart Rate Measurement (0x2A37): flags bit 0 = 16-bit value. */
-export function parseHeartRate(view: DataView): number {
-  const flags = view.getUint8(0);
-  return flags & 1 ? view.getUint16(1, true) : view.getUint8(1);
-}
-
 export interface RunSnapshot {
   elapsedS: number;
   distanceM: number;
@@ -77,7 +71,6 @@ export interface RunSnapshot {
   /** seconds per km; Infinity when not moving */
   paceS: number;
   cadence: number;
-  heartRate: number | null;
   laps: number;
   source: 'gps' | 'steps';
 }
@@ -116,7 +109,6 @@ export function runSummary(r: RunSnapshot, lead = ''): string {
     parts.push(`Pace ${m} ${s < 10 ? 'oh ' : ''}${s} per kilometre.`);
   }
   if (r.cadence > 0) parts.push(`Cadence ${Math.round(r.cadence)}.`);
-  if (r.heartRate) parts.push(`Heart rate ${r.heartRate}.`);
   return parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 }
 

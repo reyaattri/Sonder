@@ -40,9 +40,7 @@ const downloads = [
     'https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_quantized.onnx',
     'models/depth_anything_v2_small_q8.onnx',
   ],
-  // Google Project Guideline (Apache-2.0): guideline segmentation + depth models, and its sound pack.
-  ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/vision/models/guideline.tflite', 'models/pg_guideline.tflite'],
-  ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/vision/models/depth.tflite', 'models/pg_depth.tflite'],
+  // The guide-line sound pack (Apache-2.0, see THIRD_PARTY_NOTICES.md).
   ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/audio/assets/legacy_v4_2_steering.ogg', 'sounds/pg/legacy_v4_2_steering.ogg'],
   ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/audio/assets/legacy_v4_2_warning.ogg', 'sounds/pg/legacy_v4_2_warning.ogg'],
   ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/audio/assets/legacy_v4_2_stop.ogg', 'sounds/pg/legacy_v4_2_stop.ogg'],
@@ -61,11 +59,6 @@ const downloads = [
   ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/audio/assets/sharpleft.ogg', 'sounds/pg/sharpleft.ogg'],
   ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/audio/assets/sharpright.ogg', 'sounds/pg/sharpright.ogg'],
   ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/audio/assets/straight.ogg', 'sounds/pg/straight.ogg'],
-  // Real-world test data from Project Guideline (Apache-2.0): a real waist-camera photo of
-  // their purple line on a leafy path, with Google's hand-labelled line mask.
-  ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/vision/testdata/guideline1.png', 'samples/pg/guideline1.png'],
-  ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/vision/testdata/guideline1_mask_golden.png', 'samples/pg/guideline1_mask_golden.png'],
-  ['https://raw.githubusercontent.com/google-research/project-guideline/main/project_guideline/vision/testdata/obstacle_synthetic.png', 'samples/pg/obstacle_synthetic.png'],
 ];
 
 async function exists(p) {

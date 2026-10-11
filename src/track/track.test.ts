@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { driftLevel, hapticPattern, LaneFeedback } from './feedback';
-import { AnnounceSchedule, formatPace, GpsDistance, haversine, parseHeartRate, runSummary, type RunSnapshot } from './run';
+import { AnnounceSchedule, formatPace, GpsDistance, haversine, runSummary, type RunSnapshot } from './run';
 
 describe('lane feedback', () => {
   const cfg = { deadband: 0.12, cueSide: 'line' as const };
@@ -64,15 +64,10 @@ describe('run metrics', () => {
     expect(g.speed).toBeGreaterThan(3);
   });
 
-  it('parses 8- and 16-bit heart-rate measurements', () => {
-    expect(parseHeartRate(new DataView(new Uint8Array([0, 152]).buffer))).toBe(152);
-    expect(parseHeartRate(new DataView(new Uint8Array([1, 0x2c, 0x01]).buffer))).toBe(300);
-  });
-
   it('spoken summary and pace formatting', () => {
-    const r: RunSnapshot = { elapsedS: 312, distanceM: 1000, speed: 3.2, paceS: 312, cadence: 171.6, heartRate: 151, laps: 2, source: 'gps' };
+    const r: RunSnapshot = { elapsedS: 312, distanceM: 1000, speed: 3.2, paceS: 312, cadence: 171.6, laps: 2, source: 'gps' };
     expect(runSummary(r, 'Lap 2.')).toBe(
-      'Lap 2. 1.00 kilometres in 5 minutes 12 seconds. Pace 5 12 per kilometre. Cadence 172. Heart rate 151.',
+      'Lap 2. 1.00 kilometres in 5 minutes 12 seconds. Pace 5 12 per kilometre. Cadence 172.',
     );
     expect(formatPace(305)).toBe('5:05');
     expect(formatPace(Infinity)).toBe('–');
@@ -80,7 +75,7 @@ describe('run metrics', () => {
 
   it('announces once per lap', () => {
     const s = new AnnounceSchedule();
-    const r = (laps: number): RunSnapshot => ({ elapsedS: 60, distanceM: laps * 400, speed: 3, paceS: 333, cadence: 0, heartRate: null, laps, source: 'gps' });
+    const r = (laps: number): RunSnapshot => ({ elapsedS: 60, distanceM: laps * 400, speed: 3, paceS: 333, cadence: 0, laps, source: 'gps' });
     expect(s.due(r(0), 'lap', 2)).toBeNull();
     expect(s.due(r(1), 'lap', 2)).toBe('Lap 1.');
     expect(s.due(r(1), 'lap', 2)).toBeNull();

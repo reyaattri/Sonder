@@ -1,5 +1,5 @@
 /**
- * World-space guideline model (the approach of Google's Project Guideline,
+ * World-space guideline model (the approach of the open-source guide-line system,
  * written for the browser):
  *
  *   image keypoints --(camera pitch + height)--> ground plane (metres)

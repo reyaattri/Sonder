@@ -2,7 +2,7 @@ import './style.css';
 import { Session, type FrameReport } from './app/session';
 import { AudioEngine, classifyOutput } from './audio/engine';
 import { DepthClient } from './depth/client';
-import { CameraError, CameraSource, FileSource, ImageSource, listCameras, shouldMirror, WakeLock, type FrameSource } from './camera/source';
+import { CameraError, CameraSource, listCameras, shouldMirror, WakeLock, type FrameSource } from './camera/source';
 import { DEFAULT_SETTINGS, isWorn, loadSettings, saveSettings, type Activity, type Mount, type Settings } from './core/settings';
 import { DetectionClient } from './detect/client';
 import { MODELS } from './detect/detector';
@@ -10,13 +10,12 @@ import { MotionSensor } from './sensors/motion';
 import { Announcer } from './speech/announcer';
 import { clearOverlay, drawOverlay } from './ui/overlay';
 import { drawRadar } from './ui/radar';
-import { HeartRateMonitor, RunTracker } from './track/devices';
+import { RunTracker } from './track/devices';
 import { formatDuration, formatPace } from './track/run';
 import { TrackSession, type TrackReport } from './track/trackSession';
 import { drawLaneGauge, drawLaneOverlay } from './ui/laneGauge';
 import { TrackSimulator } from './sim/simulator';
 import { WalkSimulator } from './sim/walkSim';
-import { PgSegClient } from './track/pgSegClient';
 import { Listener } from './voice/listener';
 import { matchIntent, type Intent } from './voice/intents';
 import { VoiceMenu, type MenuStep } from './voice/menu';
@@ -30,8 +29,7 @@ const announcer = new Announcer({ polite: $('sr-polite'), assertive: $('sr-asser
 const detector = new DetectionClient(BASE);
 const motion = new MotionSensor();
 const session = new Session(settings, audio, announcer, detector, motion);
-const hr = new HeartRateMonitor();
-const runTracker = new RunTracker(motion, hr);
+const runTracker = new RunTracker(motion);
 // Track mode's "runner ahead" detector: fast model on the CPU, so the GPU stays free for 60 fps lane guidance.
 const trackDetector = new DetectionClient(BASE, false);
 /** Settings in effect for track mode (simulator overrides applied). */
@@ -42,8 +40,6 @@ let sim: TrackSimulator | null = null;
 let wsim: WalkSimulator | null = null;
 const track = new TrackSession(audio, announcer, trackDetector, runTracker, () => (simOverrides ? { ...settings, ...simOverrides } : settings), motion);
 const tvideo = $<HTMLVideoElement>('tvideo');
-/** Google Project Guideline's segmentation model, for purple guide-line courses. */
-const pgSeg = new PgSegClient(BASE);
 const wakeLock = new WakeLock();
 /** Depth AI for the virtual cane and echolocation (GPU when available). */
 const depthClient = new DepthClient(BASE, true);
@@ -53,7 +49,6 @@ const overlay = $<HTMLCanvasElement>('overlay');
 const radar = $<HTMLCanvasElement>('radar');
 const dialog = $<HTMLDialogElement>('settings');
 const form = $<HTMLFormElement>('settings-form');
-let testVideo: File | null = null;
 let modelLoading: Promise<void> | null = null;
 let lastReport: FrameReport | null = null;
 
@@ -66,6 +61,7 @@ let current: ScreenId = 'welcome';
 
 function show(id: ScreenId): void {
   current = id;
+  updateKeepAlive();
   document.querySelectorAll<HTMLElement>('.screen').forEach((s) => s.removeAttribute('data-active'));
   const el = $(`screen-${id}`);
   el.setAttribute('data-active', '');
@@ -135,21 +131,6 @@ $('activity-group').addEventListener('keydown', (e) => {
   document.querySelector<HTMLButtonElement>(`[data-activity="${a}"]`)?.focus();
 });
 
-$('btn-hr').addEventListener('click', async () => {
-  if (!HeartRateMonitor.supported) {
-    announcer.say('This browser cannot connect to Bluetooth heart-rate monitors. Use Chrome on Android or a computer.');
-    return;
-  }
-  try {
-    await hr.connect();
-    announcer.say(`Connected to ${hr.name}.`);
-  } catch (e) {
-    if ((e as Error).name !== 'NotFoundError') announcer.say('Could not connect to the heart-rate monitor.');
-  }
-  void refreshChecks();
-});
-hr.onChange = () => void refreshChecks();
-
 function renderMount(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-mount]').forEach((b) => {
     const on = b.dataset.mount === settings.mount;
@@ -187,8 +168,6 @@ async function refreshChecks(): Promise<void> {
   } catch {
     /* unknown */
   }
-  if (!HeartRateMonitor.supported) setCheck('hr', 'idle', 'Not supported in this browser');
-  else setCheck('hr', hr.connected ? 'ok' : 'idle', hr.connected ? `${hr.name}${hr.current ? `, ${hr.current} bpm` : ''}` : 'Not connected (optional)');
   setCheck('haptics', 'vibrate' in navigator ? 'ok' : 'warn', 'vibrate' in navigator ? 'Supported' : 'Not on this phone: sound only');
   // Sound
   if (audio.ctx) {
@@ -267,16 +246,11 @@ function preloadModel(): Promise<void> {
 }
 
 async function startRunning(simSource?: FrameSource): Promise<void> {
-  const usingFile = testVideo !== null && !simSource;
-  status('Starting', usingFile ? 'Loading the test video.' : 'Your browser will ask to use the camera. Choose Allow.', {
+  status('Starting', simSource ? 'Starting the simulator.' : 'Your browser will ask to use the camera. Choose Allow.', {
     busy: true,
   });
-  if (!usingFile && !simSource) announcer.say('Your browser will ask to use the camera. Choose Allow.');
-  const source: FrameSource = simSource
-    ? simSource
-    : usingFile
-    ? new FileSource(video, testVideo!)
-    : new CameraSource(video, settings.cameraId, 30, settings.wideAngle);
+  if (!simSource) announcer.say('Your browser will ask to use the camera. Choose Allow.');
+  const source: FrameSource = simSource ?? new CameraSource(video, settings.cameraId, 30, settings.wideAngle);
   try {
     await source.start();
   } catch (e) {
@@ -312,6 +286,7 @@ async function startRunning(simSource?: FrameSource): Promise<void> {
   applyMountUi();
   show('running');
   await session.start(source);
+  updateKeepAlive();
   updateMirror();
   startMediaSession();
   audio.earcon('start');
@@ -327,7 +302,7 @@ function updateMirror(): void {
 }
 
 async function switchCamera(deviceId: string): Promise<void> {
-  if (session.state === 'idle' || testVideo) return;
+  if (session.state === 'idle') return;
   const src = new CameraSource(video, deviceId, 30, settings.wideAngle);
   try {
     session.currentSource?.stop();
@@ -633,7 +608,18 @@ function togglePause(): void {
   }
 }
 
+/** Bluetooth keep-alive: only while guidance runs, only on Bluetooth output. */
+function updateKeepAlive(): void {
+  const guiding = (current === 'running' && session.state === 'running') || (current === 'track' && track.state === 'running');
+  if (!guiding) return audio.setKeepAliveWanted(false);
+  void outputLabel().then((l) => {
+    const k = classifyOutput(l);
+    audio.setKeepAliveWanted(k === 'bt-stereo' || k === 'bt-handsfree');
+  });
+}
+
 function setPaused(p: boolean): void {
+  setTimeout(updateKeepAlive, 0);
   $('screen-running').classList.toggle('paused', p);
   $('btn-pause').textContent = p ? 'Resume' : 'Pause';
   $('pause-label').textContent = p ? `EchoPath is paused. ${gestureText(true)}` : `EchoPath is running. ${gestureText(false)}`;
@@ -701,7 +687,34 @@ function stopWalkSimulator(): void {
   if (settings.mount !== 'table') void motion.start();
 }
 
-type Scene = 'live-walk' | 'live-run' | 'walk' | 'stadium' | 'road' | 'purple' | 'pg-photo' | 'photo-walk' | 'video-walk' | 'video-run';
+type Scene = 'live-walk' | 'live-line' | 'live-lane' | 'walk' | 'stadium' | 'road';
+
+/**
+ * Live track modes with the real camera, shown large like the live scan: a
+ * single painted line (any colour: white, yellow or blue) or track lanes.
+ */
+let liveTrack: 'line' | 'lane' | null = null;
+
+async function startLiveTrack(kind: 'line' | 'lane'): Promise<void> {
+  await audio.unlock().catch(() => {});
+  announcer.unlock();
+  liveTrack = kind;
+  simOverrides = kind === 'line' ? { trackCourse: 'line', lineColor: 'any', trackCountdown: false } : { trackCourse: 'lanes', trackCountdown: false };
+  $('sim-panel').classList.add('real');
+  await startTrack(undefined, true);
+  if (track.state === 'idle') {
+    // Camera didn't open: undo the live settings.
+    liveTrack = null;
+    simOverrides = null;
+    $('sim-panel').classList.remove('real');
+    return;
+  }
+  announcer.showText(
+    kind === 'line'
+      ? 'Live: point the camera at the painted line a few steps ahead, then walk or run along it.'
+      : 'Live: point the camera down your lane, a few steps ahead.',
+  );
+}
 
 /** Live walk view: the real camera, large, with what EchoPath sees drawn on it. */
 let liveWalk = false;
@@ -725,40 +738,24 @@ function hideLiveWalkView(): void {
 }
 
 /** Live walking in the real world: camera on, scan around you, then guidance. */
-async function startLiveWalk(photo?: string): Promise<void> {
+async function startLiveWalk(): Promise<void> {
   await audio.unlock().catch(() => {});
   announcer.unlock();
-  testVideo = null;
   void depthClient.load().catch((e) => console.warn('[EchoPath] depth unavailable:', e));
   showLiveWalkView();
-  await startRunning(photo ? new ImageSource(video, photo) : undefined);
+  await startRunning();
   if (session.state !== 'running') return hideLiveWalkView();
   scanLines = [];
   session.startScan();
 }
 
-/** One dropdown for every practice scene: simulations and real footage. */
+/** One dropdown: the live modes and the simulations. */
 async function startScene(scene: Scene): Promise<void> {
   if (scene === 'live-walk') return startLiveWalk();
-  if (scene === 'photo-walk') return startLiveWalk(`${BASE}samples/pg/guideline1.png`);
-  if (scene === 'live-run') {
-    testVideo = null;
-    return startTrack(undefined, true);
-  }
+  if (scene === 'live-line') return startLiveTrack('line');
+  if (scene === 'live-lane') return startLiveTrack('lane');
   if (scene === 'walk') return startWalkSimulator();
-  if (scene === 'stadium' || scene === 'road' || scene === 'purple') return startSimulator(scene);
-  if (scene === 'pg-photo') return startRealPhoto();
-  // Real video: pick the file, then run it through the walk or track pipeline.
-  const input = $<HTMLInputElement>('practice-file');
-  input.value = '';
-  input.onchange = () => {
-    const f = input.files?.[0];
-    if (!f) return;
-    testVideo = f;
-    if (scene === 'video-walk') void startRunning();
-    else void startTrack();
-  };
-  input.click();
+  return startSimulator(scene);
 }
 
 $('btn-practice').addEventListener('click', () => void startScene($<HTMLSelectElement>('practice-scene').value as Scene));
@@ -766,74 +763,9 @@ $<HTMLSelectElement>('wsim-scene').addEventListener('change', (e) => {
   const v = (e.target as HTMLSelectElement).value as Scene;
   if (v === 'walk' || !wsim) return;
   $('btn-stop').click();
-  void startSimulator(v as 'stadium' | 'road' | 'purple');
+  void startSimulator(v as 'stadium' | 'road');
 });
 
-/** Google's real-world truth for the Project Guideline photo: which pixels are the line. */
-let golden: { w: number; h: number; on: Uint8Array } | null = null;
-let realPhoto = false;
-
-async function loadGolden(): Promise<void> {
-  const img = new Image();
-  img.src = `${BASE}samples/pg/guideline1_mask_golden.png`;
-  await img.decode();
-  const c = document.createElement('canvas');
-  c.width = img.naturalWidth;
-  c.height = img.naturalHeight;
-  const g = c.getContext('2d', { willReadFrequently: true })!;
-  g.drawImage(img, 0, 0);
-  const px = g.getImageData(0, 0, c.width, c.height).data;
-  const on = new Uint8Array(c.width * c.height);
-  for (let i = 0; i < on.length; i++) on[i] = px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2] > 300 ? 1 : 0;
-  golden = { w: c.width, h: c.height, on };
-}
-
-/**
- * Score Google's model output (keypoints) against Google's own hand-labelled
- * line: how many keypoints land on the real line, how much of the line is
- * found, and the mean horizontal miss in pixels.
- */
-function goldenScore(kps: { x: number; y: number }[]): { precision: number; recall: number; errPx: number } | null {
-  if (!golden || !kps.length) return null;
-  const { w, h, on } = golden;
-  const centre = (y: number) => {
-    let s = 0, n = 0;
-    for (let x = 0; x < w; x++) if (on[y * w + x]) (s += x), n++;
-    return n ? s / n : null;
-  };
-  let hit = 0, err = 0, errN = 0;
-  for (const k of kps) {
-    const y = Math.min(h - 1, Math.round(k.y * h)), c = centre(y);
-    if (c === null) continue;
-    const d = Math.abs(k.x * w - c);
-    if (d < 12) hit++;
-    err += d;
-    errN++;
-  }
-  const bands = 12;
-  let lineBands = 0, found = 0;
-  for (let b = 0; b < bands; b++) {
-    const y0 = Math.floor((b * h) / bands), y1 = Math.floor(((b + 1) * h) / bands);
-    let has = false;
-    for (let y = y0; y < y1 && !has; y += 2) has = centre(y) !== null;
-    if (!has) continue;
-    lineBands++;
-    if (kps.some((k) => k.y * h >= y0 && k.y * h < y1)) found++;
-  }
-  return { precision: hit / kps.length, recall: lineBands ? found / lineBands : 0, errPx: errN ? err / errN : 0 };
-}
-
-/** Real-world check: Google's real photo through the real track pipeline and Google's model. */
-async function startRealPhoto(): Promise<void> {
-  await audio.unlock().catch(() => {});
-  announcer.unlock();
-  realPhoto = true;
-  simOverrides = { trackCourse: 'line', lineColor: 'purple', mountHeight: 1.0, cameraFacing: 'same', trackCountdown: false };
-  void loadGolden().catch((e) => console.warn('[EchoPath] golden mask:', e));
-  $('sim-panel').classList.add('real');
-  await startTrack(new ImageSource(tvideo, `${BASE}samples/pg/guideline1.png`), true);
-  announcer.showText("Real-world check: Google Project Guideline's own test photo, a real path with their purple line and fallen leaves. Scored against Google's hand-labelled line.");
-}
 for (const [id, key] of [
   ['wsim-left', 'left'],
   ['wsim-right', 'right'],
@@ -953,17 +885,16 @@ function renderStats(st: FrameReport['stats']): void {
 // ---------------------------------------------------------------------------
 // Track run: lane guidance + live run stats (KineticSpatial)
 // ---------------------------------------------------------------------------
-const SIM_OVERRIDES: Record<'stadium' | 'road' | 'purple', Partial<Settings>> = {
+const SIM_OVERRIDES: Record<'stadium' | 'road', Partial<Settings>> = {
   stadium: { trackCourse: 'lanes', lineColor: 'white', mountHeight: 1.3, cameraFacing: 'same' },
   road: { trackCourse: 'line', lineColor: 'yellow', mountHeight: 1.3, cameraFacing: 'same' },
-  purple: { trackCourse: 'line', lineColor: 'purple', mountHeight: 1.3, cameraFacing: 'same' },
 };
 
 /** Practice / demo: the real track pipeline driven by the built-in simulator. */
-async function startSimulator(pick?: 'stadium' | 'road' | 'purple'): Promise<void> {
+async function startSimulator(pick?: 'stadium' | 'road'): Promise<void> {
   await audio.unlock().catch(() => {});
   announcer.unlock();
-  const course = pick ?? (settings.trackCourse === 'lanes' ? 'stadium' : settings.lineColor === 'purple' ? 'purple' : 'road');
+  const course = pick ?? (settings.trackCourse === 'lanes' ? 'stadium' : 'road');
   motion.stop(); // the simulator provides motion; ignore the real phone's sensors meanwhile
   sim = new TrackSimulator(course, motion);
   simOverrides = SIM_OVERRIDES[course];
@@ -1021,11 +952,26 @@ $<HTMLSelectElement>('sim-course').addEventListener('change', (e) => {
     void startWalkSimulator();
     return;
   }
-  const c = (e.target as HTMLSelectElement).value as 'stadium' | 'road' | 'purple';
+  const c = (e.target as HTMLSelectElement).value as 'stadium' | 'road';
   sim.setCourse(c);
   simOverrides = SIM_OVERRIDES[c];
-  if (c === 'purple') void pgSeg.load().catch(() => {});
   announcer.say(c === 'road' ? 'Road with a yellow guide line.' : 'Four hundred metre track, lane three.');
+});
+$('sim-demo').addEventListener('click', (e) => {
+  if (!sim) return;
+  const on = !sim.demoOn;
+  sim.setDemo(on);
+  sim.onDemoDone = () => {
+    $('sim-demo').setAttribute('aria-pressed', 'false');
+    $('sim-truth').classList.remove('scan');
+    simScore.length = 0; // accuracy from here on: normal running on the line
+    announcer.say('All cases done. Back to normal running on the line.', { interrupt: true });
+    announcer.showText('All cases done. Back to normal running: the readout shows how closely EchoPath holds the line.');
+  };
+  (e.currentTarget as HTMLElement).setAttribute('aria-pressed', String(on));
+  // The demo shows the runner-ahead cases: make sure that detector is on.
+  if (on && !trackDetector.model) void trackDetector.load('efficientdet_lite0').catch(() => {});
+  announcer.say(on ? 'Demo of every case. Each one is described on screen.' : 'Demo off.', { interrupt: true });
 });
 $('sim-slower').addEventListener('click', () => sim && (sim.runner.speed = Math.max(1.5, sim.runner.speed - 0.5)));
 $('sim-faster').addEventListener('click', () => sim && (sim.runner.speed = Math.min(7, sim.runner.speed + 0.5)));
@@ -1034,11 +980,9 @@ $('sim-faster').addEventListener('click', () => sim && (sim.runner.speed = Math.
 const simScore: { t: number; truth: number; est: number | null }[] = [];
 
 async function startTrack(simSource?: FrameSource, realWorld = false): Promise<void> {
-  const usingFile = testVideo !== null && !simSource;
-  status('Starting track mode', usingFile ? 'Loading the test video.' : 'Your browser will ask for the camera and your location. Choose Allow for both.', { busy: true });
-  if (!usingFile) announcer.say('Your browser will ask for the camera and your location. Choose Allow for both.');
-  const source: FrameSource =
-    simSource ?? (usingFile ? new FileSource(tvideo, testVideo!) : new CameraSource(tvideo, settings.cameraId, 60));
+  status('Starting track mode', simSource ? 'Starting the simulator.' : 'Your browser will ask for the camera and your location. Choose Allow for both.', { busy: true });
+  if (!simSource) announcer.say('Your browser will ask for the camera and your location. Choose Allow for both.');
+  const source: FrameSource = simSource ?? new CameraSource(tvideo, settings.cameraId, 60);
   try {
     await source.start();
   } catch (e) {
@@ -1049,9 +993,7 @@ async function startTrack(simSource?: FrameSource, realWorld = false): Promise<v
     announcer.say(msg, { interrupt: true });
     return;
   }
-  track.pgSeg = pgSeg;
-  if (eff().lineColor === 'purple' && eff().trackCourse !== 'lanes') void pgSeg.load().catch((e) => console.warn('[EchoPath] PG model:', e));
-  // Google Project Guideline's sound pack (falls back to the glide tone if it can't decode).
+  // The guide-line system's sound pack (falls back to the glide tone if it can't decode).
   if (settings.trackStyle === 'pg') await audio.loadPgSounds(BASE).catch(() => false);
   // The object model only powers "runner ahead"; lane guidance never waits for it.
   if (settings.trackObstacles && trackDetector.model !== 'efficientdet_lite0')
@@ -1088,9 +1030,11 @@ async function startTrack(simSource?: FrameSource, realWorld = false): Promise<v
     announcer.say('Go.', { system: false, priority: 0, interrupt: true });
     audio.earcon('start');
     track.start(source);
+    updateKeepAlive();
     if (sim) sim.frozen = false;
   } else {
     track.start(source);
+    updateKeepAlive();
     if (sim) sim.frozen = false;
     audio.earcon('start');
     announcer.say(`Track mode. ${intro} Press and hold to pause, double-tap for your stats.`);
@@ -1098,6 +1042,7 @@ async function startTrack(simSource?: FrameSource, realWorld = false): Promise<v
 }
 
 function setTrackPaused(p: boolean): void {
+  setTimeout(updateKeepAlive, 0);
   $('screen-track').classList.toggle('paused', p);
   $('btn-tpause').textContent = p ? 'Resume' : 'Pause';
   $('track-hint').textContent = p ? 'Press and hold anywhere to resume.' : 'Press and hold anywhere to pause. Double-tap to hear your stats.';
@@ -1130,11 +1075,14 @@ function sayStats(): void {
 function stopTrack(): void {
   track.stop();
   stopSimulator();
-  if (realPhoto) {
-    realPhoto = false;
+  if (liveTrack) {
+    liveTrack = null;
     simOverrides = null;
     $('sim-panel').classList.remove('real');
   }
+  const demoBtn = $('sim-demo');
+  demoBtn.setAttribute('aria-pressed', 'false');
+  $('sim-truth').classList.remove('scan');
   if ($('sim-panel').classList.contains('live')) {
     $('tpip').prepend(tvideo);
     $('sim-view').style.removeProperty('--ar');
@@ -1155,22 +1103,32 @@ $('btn-tstop').addEventListener('click', () => stopTrack());
 $('btn-tsettings').addEventListener('click', () => openSettings());
 
 let lastTrackUi = 0;
+let lastLiveText = 0;
 track.onFrame = (r: TrackReport) => {
   const eff = simOverrides ? { ...settings, ...simOverrides } : settings;
   drawLaneGauge($<HTMLCanvasElement>('lane-gauge'), r, 0.61, eff.trackCourse);
   if (sim) {
     sim.guidance = r.guide;
     sim.halted = r.stopped;
+    sim.ahead = r.runnerAhead
+      ? { distance: r.runnerAhead.distance, side: r.runnerAhead.box.x + r.runnerAhead.box.w / 2 < 0.5 ? 'right' : 'left' }
+      : null;
     drawLaneOverlay($<HTMLCanvasElement>('sim-overlay'), sim.canvas, r, sim.camera());
     simScore.push({ t: performance.now(), truth: sim.lateral, est: r.world ? r.world.lateral : null });
     while (simScore.length && performance.now() - simScore[0].t > 60000) simScore.shift();
   } else if ($('sim-panel').classList.contains('live')) {
     drawLaneOverlay($<HTMLCanvasElement>('sim-overlay'), tvideo, r);
-    if (realPhoto) {
-      const sc = goldenScore(pgSeg.latest?.keypoints ?? []);
-      $('sim-truth').textContent = sc
-        ? `Google's model vs Google's hand labels: ${Math.round(sc.precision * 100)}% of points on the real line, ${Math.round(sc.recall * 100)}% of the line found, mean miss ${sc.errPx.toFixed(1)} px\nEchoPath: ${r.world ? `${Math.abs(r.world.lateral).toFixed(2)} m ${r.world.lateral > 0 ? 'right of' : 'left of'} the line` : 'line not locked'} · ${r.guide.magnitude > 0.05 ? `steer ${r.guide.steer > 0 ? 'right' : 'left'}` : 'on line'}`
-        : "Running Google's model on the real photo...";
+    if (liveTrack && performance.now() - lastLiveText > 300) {
+      lastLiveText = performance.now();
+      const n = r.lane.keypoints.left.length + r.lane.keypoints.right.length;
+      const el = $('sim-truth');
+      el.classList.add('scan');
+      el.textContent =
+        `${liveTrack === 'line' ? 'Line' : 'Lane'}: ${r.lost ? 'looking for it…' : `found (${n} points)`}\n` +
+        (r.stopped ? 'EchoPath: STOP\n' : r.world ? `You: ${Math.abs(r.world.lateral).toFixed(2)} m ${r.world.lateral > 0 ? 'right' : 'left'} of the ${liveTrack} · ${r.guide.magnitude > 0.05 ? `steer ${r.guide.steer > 0 ? 'right' : 'left'}` : 'on line'}\n` : '') +
+        (r.bend ? `Bend to the ${r.bend} ahead\n` : '') +
+        (r.runnerAhead ? `Someone ahead, ${r.runnerAhead.distance.toFixed(0)} m\n` : '') +
+        `Moving: ${r.run.speed.toFixed(1)} m/s · ${Math.round(r.run.distanceM)} m`;
     }
   } else if (settings.debugOverlay) {
     drawLaneOverlay($<HTMLCanvasElement>('toverlay'), tvideo, r);
@@ -1183,7 +1141,6 @@ track.onFrame = (r: TrackReport) => {
   $('m-dist').textContent = run.distanceM >= 1000 ? `${(run.distanceM / 1000).toFixed(2)} km` : `${Math.round(run.distanceM)} m`;
   $('m-pace').textContent = formatPace(run.paceS);
   $('m-cad').textContent = run.cadence ? String(Math.round(run.cadence)) : '–';
-  $('m-hr').textContent = run.heartRate ? String(run.heartRate) : '–';
   $('m-laps').textContent = String(run.laps);
   setChip(
     'tchip-lane',
@@ -1192,12 +1149,26 @@ track.onFrame = (r: TrackReport) => {
   );
   const gps = runTracker.gpsState;
   setChip('tchip-gps', gps === 'ok' ? 'ok' : gps === 'waiting' ? 'warn' : 'idle', gps === 'ok' ? 'GPS' : gps === 'waiting' ? 'GPS searching' : 'Step distance');
-  setChip('tchip-hr', run.heartRate ? 'ok' : 'idle', run.heartRate ? `${run.heartRate} bpm` : 'No HR');
   setChip('tchip-perf', r.fps >= 24 ? 'ok' : r.fps >= 12 ? 'warn' : 'bad', `${r.fps.toFixed(0)} fps`);
   if (sim) {
     const withEst = simScore.filter((s) => s.est !== null);
     const rms = withEst.length ? Math.sqrt(withEst.reduce((a, s) => a + (s.truth - s.est!) ** 2, 0) / withEst.length) : NaN;
     const inLane = simScore.filter((s) => Math.abs(s.truth) < (eff.trackCourse === 'lanes' ? 0.61 : 0.5)).length / Math.max(1, simScore.length);
+    const demo = sim.demoStatus();
+    $('sim-truth').classList.toggle('scan', !!demo);
+    if (demo) {
+      const now =
+        r.stopped
+          ? 'STOP'
+          : r.runnerAhead
+            ? `someone ahead ${r.runnerAhead.distance.toFixed(0)} m`
+            : r.guide.magnitude > 0.05
+              ? `steering sound in the ${r.guide.steer > 0 ? 'right' : 'left'} ear`
+              : 'silent (on line)';
+      $('sim-truth').textContent =
+        `Case ${demo.n} of ${demo.total}: ${demo.title}\n${demo.expect}\nEchoPath right now: ${now}${r.bend ? ` · bend ${r.bend} ahead` : ''} · you are ${Math.abs(sim.lateral).toFixed(2)} m ${sim.lateral > 0 ? 'right' : 'left'} of the line`;
+      return;
+    }
     $('sim-truth').textContent =
       `Truth: ${Math.abs(sim.lateral).toFixed(2)} m ${sim.lateral > 0 ? 'right' : 'left'} · EchoPath: ${r.world ? `${Math.abs(r.world.lateral).toFixed(2)} m ${r.world.lateral > 0 ? 'right' : 'left'}` : '–'}\n` +
       `Estimate error (RMS, last min): ${Number.isFinite(rms) ? rms.toFixed(2) + ' m' : '–'} · In lane: ${(inLane * 100).toFixed(0)}% · ${sim.runner.speed.toFixed(1)} m/s · ${Math.round(sim.runner.distance)} m`;
@@ -1387,7 +1358,6 @@ function fillForm(): void {
   setVal('edgeGap', String(settings.edgeGap));
   setVal('targetPace', settings.targetPaceS ? `${Math.floor(settings.targetPaceS / 60)}:${String(settings.targetPaceS % 60).padStart(2, '0')}` : '');
   setVal('metronomeSpm', String(settings.metronomeSpm));
-  setVal('hrMax', String(settings.hrMax));
   setChecked('trackCountdown', settings.trackCountdown);
   setVal('trackDeadband', String(Math.round(settings.trackDeadband * 100)));
   setChecked('trackHaptics', settings.trackHaptics);
@@ -1395,7 +1365,6 @@ function fillForm(): void {
   setVal('trackAnnounceMinutes', String(settings.trackAnnounceMinutes));
   setVal('lapMeters', String(settings.lapMeters));
   setVal('runStepLength', String(settings.runStepLength));
-  setVal('maxHeartRate', String(settings.maxHeartRate));
   setChecked('trackObstacles', settings.trackObstacles);
   setChecked('wideAngle', settings.wideAngle);
   syncOutputs();
@@ -1447,9 +1416,7 @@ form.addEventListener('input', (e) => {
     case 'trackAnnounceMinutes':
     case 'lapMeters':
     case 'runStepLength':
-    case 'maxHeartRate':
     case 'metronomeSpm':
-    case 'hrMax':
     case 'mountHeight':
     case 'edgeGap': {
       const n = Number(t.value);
@@ -1637,12 +1604,6 @@ $('btn-offline').addEventListener('click', async (e) => {
   } finally {
     btn.disabled = false;
   }
-});
-
-$<HTMLInputElement>('file-video').addEventListener('change', (e) => {
-  const f = (e.target as HTMLInputElement).files?.[0] ?? null;
-  testVideo = f;
-  announcer.say(f ? `Test video selected. Tap Start to use it instead of the camera.` : 'Using the camera.');
 });
 
 $('btn-log').addEventListener('click', () => {

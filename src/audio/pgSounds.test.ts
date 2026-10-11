@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyShaping, steerPan, warningPan } from './pgSounds';
 
-describe('Project Guideline sound mapping', () => {
+describe('the guide-line system sound mapping', () => {
   it('sensitivity shaping keeps small corrections small, big ones full', () => {
     expect(applyShaping(0)).toBe(0);
     expect(Math.abs(applyShaping(0.2))).toBeLessThan(0.2); // quieter than linear
