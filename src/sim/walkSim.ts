@@ -69,6 +69,8 @@ export interface WalkGuidance {
   noWay: boolean;
   /** Virtual-cane distance (m) when its tone is sounding. */
   caneM?: number | null;
+  /** "Person ahead, walking your way: pass on the ..." */
+  pass?: 'left' | 'right' | null;
 }
 
 export interface WalkScore {
@@ -294,6 +296,8 @@ export class WalkSimulator {
       } else if (g.blocked) {
         vx = 0;
         vy = 0;
+      } else if (g.pass) {
+        vy += g.pass === 'left' ? -0.35 : 0.35; // ease out to pass
       }
     }
     vy += (this.input.right ? 0.8 : 0) - (this.input.left ? 0.8 : 0);

@@ -18,6 +18,7 @@ import { TrackSimulator } from './sim/simulator';
 import { WalkSimulator } from './sim/walkSim';
 import { PgSegClient } from './track/pgSegClient';
 import { Listener } from './voice/listener';
+import { matchIntent, type Intent } from './voice/intents';
 import { VoiceMenu, type MenuStep } from './voice/menu';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -645,6 +646,7 @@ function setPaused(p: boolean): void {
 $('btn-stop').addEventListener('click', () => {
   session.stop();
   stopWalkSimulator();
+  hideLiveWalkView();
   wakeLock.release();
   stopMediaSession();
   clearOverlay(overlay);
@@ -654,7 +656,21 @@ $('btn-stop').addEventListener('click', () => {
   returnHome();
 });
 
+// Live views take the camera's real shape (portrait phone or landscape webcam/photo).
+for (const v of [video, tvideo])
+  v.addEventListener('resize', () => {
+    const p = v.parentElement;
+    if (p?.classList.contains('sim-view') && v.videoWidth) p.style.setProperty('--ar', String(v.videoWidth / v.videoHeight));
+  });
 let lastWsimText = 0;
+session.onScanDone = (lines) => {
+  scanLines = lines;
+};
+$('btn-scan').addEventListener('click', () => {
+  if (session.state !== 'running') return;
+  scanLines = [];
+  session.startScan();
+});
 
 /** Practice / demo: the real WALK pipeline on a simulated park path with poles, bins and people. */
 async function startWalkSimulator(): Promise<void> {
@@ -685,10 +701,50 @@ function stopWalkSimulator(): void {
   if (settings.mount !== 'table') void motion.start();
 }
 
-type Scene = 'walk' | 'stadium' | 'road' | 'purple' | 'pg-photo' | 'video-walk' | 'video-run';
+type Scene = 'live-walk' | 'live-run' | 'walk' | 'stadium' | 'road' | 'purple' | 'pg-photo' | 'photo-walk' | 'video-walk' | 'video-run';
+
+/** Live walk view: the real camera, large, with what EchoPath sees drawn on it. */
+let liveWalk = false;
+let scanLines: string[] = [];
+
+function showLiveWalkView(): void {
+  liveWalk = true;
+  $('wsim-view').prepend(video);
+  $('wsim-panel').classList.add('live', 'real');
+  $('wsim-panel').hidden = false;
+}
+
+function hideLiveWalkView(): void {
+  if (!liveWalk) return;
+  liveWalk = false;
+  $('pip').prepend(video);
+  $('wsim-view').style.removeProperty('--ar');
+  $('wsim-panel').classList.remove('live', 'real');
+  $('wsim-panel').hidden = true;
+  $('wsim-truth').classList.remove('scan');
+}
+
+/** Live walking in the real world: camera on, scan around you, then guidance. */
+async function startLiveWalk(photo?: string): Promise<void> {
+  await audio.unlock().catch(() => {});
+  announcer.unlock();
+  testVideo = null;
+  void depthClient.load().catch((e) => console.warn('[EchoPath] depth unavailable:', e));
+  showLiveWalkView();
+  await startRunning(photo ? new ImageSource(video, photo) : undefined);
+  if (session.state !== 'running') return hideLiveWalkView();
+  scanLines = [];
+  session.startScan();
+}
 
 /** One dropdown for every practice scene: simulations and real footage. */
 async function startScene(scene: Scene): Promise<void> {
+  if (scene === 'live-walk') return startLiveWalk();
+  if (scene === 'photo-walk') return startLiveWalk(`${BASE}samples/pg/guideline1.png`);
+  if (scene === 'live-run') {
+    testVideo = null;
+    return startTrack(undefined, true);
+  }
   if (scene === 'walk') return startWalkSimulator();
   if (scene === 'stadium' || scene === 'road' || scene === 'purple') return startSimulator(scene);
   if (scene === 'pg-photo') return startRealPhoto();
@@ -806,8 +862,23 @@ function setChip(id: string, state: CheckState, text: string): void {
 let lastChipUpdate = 0;
 session.onFrame = (r) => {
   lastReport = r;
+  if (liveWalk) {
+    drawOverlay($<HTMLCanvasElement>('wsim-overlay'), video, r, settings.centerWidth, settings.corridorWidth);
+    if (performance.now() - lastWsimText > 300) {
+      lastWsimText = performance.now();
+      const now = r.policy.blocked
+        ? r.policy.noWayAround || !r.policy.guideSide ? 'STOP' : `step ${r.policy.guideSide}`
+        : r.depth?.center && r.depth.center.z < 2.5 ? `obstacle ${r.depth.center.z.toFixed(1)} m` : 'clear';
+      const leaves = r.ground && r.ground.corridor > 0.15 ? ' · leaves on the path' : r.ground && r.ground.left + r.ground.right > 0.2 ? ' · leaves at the edge' : '';
+      const el = $('wsim-truth');
+      el.classList.toggle('scan', !!r.scan || scanLines.length > 0);
+      el.textContent = r.scan
+        ? `Scanning ${Math.round(r.scan.progress * 100)}%${r.scan.sweptDeg > 5 ? ` · turned ${Math.round(r.scan.sweptDeg)}°` : ''}\nTurn slowly left, then right, then face forward.`
+        : `${scanLines.length ? scanLines.join('\n') + '\n' : ''}Now: ${now}${leaves} · ${r.stats.fps.toFixed(0)} fps`;
+    }
+  }
   if (wsim) {
-    wsim.guidance = { blocked: r.policy.blocked, side: r.policy.guideSide, noWay: r.policy.noWayAround, caneM: r.depth?.center && r.depth.center.z < 2.5 ? r.depth.center.z : null };
+    wsim.guidance = { blocked: r.policy.blocked, side: r.policy.guideSide, noWay: r.policy.noWayAround, pass: r.policy.pacing?.side ?? null, caneM: r.depth?.center && r.depth.center.z < 2.5 ? r.depth.center.z : null };
     drawOverlay($<HTMLCanvasElement>('wsim-overlay'), wsim.video, r, settings.centerWidth, settings.corridorWidth);
     if (performance.now() - lastWsimText > 300) {
       lastWsimText = performance.now();
@@ -845,10 +916,14 @@ function updateChips(r: FrameReport): void {
   const fps = r.stats.fps;
   setChip('chip-perf', fps >= 12 ? 'ok' : fps >= 6 ? 'warn' : 'bad', `${fps.toFixed(0)} fps`);
   const banner = $('banner');
-  const msg = r.policy.blocked
+  const msg = r.scan
+    ? `Scanning ${Math.round(r.scan.progress * 100)}%: turn slowly`
+    : r.policy.blocked
     ? r.policy.noWayAround
       ? 'Path blocked: no clear way around'
       : `Path blocked${r.policy.guideSide ? `: step ${r.policy.guideSide}${r.policy.guideFrom === 'path' ? ' (stays on path)' : ''}` : ''}`
+    : r.policy.pacing
+      ? `Person ahead walking your way${r.policy.pacing.side ? `: pass ${r.policy.pacing.side}` : ''}`
     : r.policy.unexplainedLooming
       ? `Something approaching from the ${r.policy.unexplainedLooming}`
     : r.quality === 'dark'
@@ -990,6 +1065,7 @@ async function startTrack(simSource?: FrameSource, realWorld = false): Promise<v
   // Live view: the real camera, large, with what EchoPath sees drawn on it.
   if ((!simSource && settings.debugOverlay) || realWorld) {
     $('sim-view').prepend(tvideo);
+    if (tvideo.videoWidth) $('sim-view').style.setProperty('--ar', String(tvideo.videoWidth / tvideo.videoHeight));
     $('sim-panel').classList.add('live');
     $('sim-panel').hidden = false;
   }
@@ -1061,6 +1137,7 @@ function stopTrack(): void {
   }
   if ($('sim-panel').classList.contains('live')) {
     $('tpip').prepend(tvideo);
+    $('sim-view').style.removeProperty('--ar');
     $('sim-panel').classList.remove('live');
     $('sim-panel').hidden = true;
   }
@@ -1166,7 +1243,8 @@ function startMediaSession(): void {
     navigator.mediaSession.setActionHandler('play', () => (track.state === 'paused' ? toggleTrackPause() : session.state === 'paused' && togglePause()));
     navigator.mediaSession.setActionHandler('pause', () => (track.state === 'running' ? toggleTrackPause() : session.state === 'running' && togglePause()));
     navigator.mediaSession.setActionHandler('nexttrack', () => (track.state !== 'idle' ? sayStats() : describe()));
-    navigator.mediaSession.setActionHandler('previoustrack', () => (track.state !== 'idle' ? sayStats() : describe()));
+    // Headphone "previous" button = push-to-talk.
+    navigator.mediaSession.setActionHandler('previoustrack', () => void voiceCommand());
     navigator.mediaSession.playbackState = 'playing';
   } catch {
     /* handlers unsupported */
@@ -1602,6 +1680,8 @@ const voiceMenu = new VoiceMenu({
   startWalk: () => void $('btn-start').click(),
   startTrack: () => void $('btn-start').click(),
   startSimulator: () => void startSimulator(),
+  startLiveWalk: () => void startLiveWalk(),
+  startScene: (scene) => void startScene(scene as Scene),
   soundCheck: () => audio.spatialTest(4),
   render: renderVoice,
   close: () => {
@@ -1696,6 +1776,107 @@ $('btn-voice-menu').addEventListener('click', async () => {
 });
 
 /** After stopping: back to the voice menu (eyes-free) or the visual home. */
+// ---------------------------------------------------------------------------
+// Push-to-talk voice commands while walking or running (button, headphone
+// "previous track" button, or the V key). The microphone opens only for this.
+// ---------------------------------------------------------------------------
+let micWarned = false;
+let commandBusy = false;
+
+const WALK_CMDS: Intent[] = ['describe', 'scan', 'pause', 'resume', 'stop', 'louder', 'quieter', 'calmer', 'detailed', 'help'];
+const RUN_CMDS: Intent[] = ['stats', 'describe', 'pause', 'resume', 'stop', 'louder', 'quieter', 'help'];
+const CMD_WORDS: Partial<Record<Intent, string>> = {
+  describe: "what's around me",
+  scan: 'scan',
+  stats: 'stats',
+  pause: 'pause',
+  resume: 'resume',
+  stop: 'stop',
+  louder: 'louder',
+  quieter: 'quieter',
+  calmer: 'calmer',
+  detailed: 'more detail',
+};
+
+function caption(text: string): void {
+  const el = track.state !== 'idle' ? $('tcmd-caption') : $('cmd-caption');
+  el.hidden = !text;
+  el.textContent = text;
+}
+
+async function voiceCommand(): Promise<void> {
+  const running = track.state !== 'idle';
+  if (commandBusy || (!running && session.state === 'idle')) return;
+  if (!listener.supported) {
+    announcer.say('Voice commands need Chrome or Edge, with the microphone allowed. Use the buttons or gestures instead.', { interrupt: true });
+    return;
+  }
+  commandBusy = true;
+  try {
+    const cmds = running ? RUN_CMDS : WALK_CMDS;
+    const list = cmds.filter((c) => CMD_WORDS[c]).map((c) => CMD_WORDS[c]).join(', ');
+    announcer.say(micWarned ? 'Listening.' : 'Listening. Bluetooth headphones may sound like a phone call for a moment.', { interrupt: true });
+    micWarned = true;
+    await announcer.whenIdle();
+    audio.earcon('tick');
+    caption('Listening…');
+    const heard = await listener.listen(5000, (t) => caption(`Hearing: "${t}"`));
+    const m = heard ? matchIntent(heard.alternatives, cmds) : null;
+    caption(heard ? `Heard: "${heard.alternatives[0]}"` : '');
+    setTimeout(() => caption(''), 3000);
+    if (!m) {
+      announcer.say(heard ? `Sorry, I didn't catch that. You can say: ${list}.` : 'I did not hear anything.', { interrupt: true });
+      return;
+    }
+    runCommand(m.intent, running, list);
+  } finally {
+    commandBusy = false;
+  }
+}
+
+function runCommand(intent: Intent, running: boolean, list: string): void {
+  const vol = (d: number) => {
+    update({ volume: Math.max(0.1, Math.min(1, settings.volume + d)) });
+    announcer.say(d > 0 ? 'Louder.' : 'Quieter.', { interrupt: true });
+  };
+  switch (intent) {
+    case 'describe':
+      return running ? sayStats() : describe();
+    case 'stats':
+      return sayStats();
+    case 'scan':
+      scanLines = [];
+      return session.startScan();
+    case 'pause':
+      if (running ? track.state === 'running' : session.state === 'running') return running ? toggleTrackPause() : togglePause();
+      return;
+    case 'resume':
+      if (running ? track.state === 'paused' : session.state === 'paused') return running ? toggleTrackPause() : togglePause();
+      return;
+    case 'stop':
+      return running ? stopTrack() : $('btn-stop').click();
+    case 'louder':
+      return vol(0.15);
+    case 'quieter':
+      return vol(-0.15);
+    case 'calmer':
+      update({ cueDensity: 'calm' });
+      return announcer.say('Calmer cues.', { interrupt: true });
+    case 'detailed':
+      update({ cueDensity: 'detailed' });
+      return announcer.say('More detail.', { interrupt: true });
+    case 'help':
+      return announcer.say(`You can say: ${list}.`, { interrupt: true });
+  }
+}
+
+$('btn-voice-cmd').addEventListener('click', () => void voiceCommand());
+$('btn-tvoice-cmd').addEventListener('click', () => void voiceCommand());
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'v' || e.key === 'V') && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement))
+    void voiceCommand();
+});
+
 function returnHome(): void {
   if (settings.voiceMenu) {
     show('voice');

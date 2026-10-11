@@ -218,7 +218,4 @@ export function drawLaneOverlay(canvas: HTMLCanvasElement, video: HTMLVideoEleme
     g.fillStyle = '#fff';
     g.fillText(label, ox + p.box.x * w + 4, oy + p.box.y * h - 4);
   }
-  g.font = '700 12px ui-monospace, monospace';
-  g.fillStyle = '#fff';
-  g.fillText(`${r.fps.toFixed(0)} fps · lane ${r.laneMs.toFixed(1)} ms`, ox + 6, oy + 16);
 }

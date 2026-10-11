@@ -9,6 +9,7 @@ const out = (o: Partial<PolicyOutput>): PolicyOutput => ({
   noWayAround: false,
   guideFrom: null,
   unexplainedLooming: null,
+  pacing: null,
   ...o,
 });
 

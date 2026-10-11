@@ -192,6 +192,37 @@ The White Cane app reads the iPhone LiDAR scanner through ARKit. Browsers cannot
 - **Their test data, as a real-world check.** `guideline1.png` is a real waist-camera photo of their purple line on a leafy path, and comes with Google's hand-labelled mask. Choose *Real photo: Google Project Guideline test path*. EchoPath runs it through the full track pipeline and scores Google's model against Google's labels. **Measured: 100 % of keypoints on the real line, 91 % of the line found, mean error 1.4 px.** EchoPath reads 0.18 m right of the line, *steer left*, which is correct.
 - What we do **not** use: their depth model (it fails on the browser GPU delegate and takes 365 ms on CPU, so Depth Anything is used instead), and their Unreal simulator (desktop C++; EchoPath has its own browser simulators). Google has not released Project Guideline's training dataset.
 
+### Live mode: the real world, through your camera
+
+Home → *Live, practice and real-world tests* → **Live: scan around you, then walk**. You can also say "live" in the voice menu.
+
+- **Scan first, like Google Maps Live View.** Hold the phone at chest height, camera facing out, and turn slowly left, then right (about 9 s). EchoPath builds a 360° picture as you turn, using the gyroscope for heading:
+  - where the walkable path goes;
+  - what's around you (detector and depth);
+  - steps and rocks (depth);
+  - leaf litter (see below).
+
+  Then it says it in short sentences with **clock positions**, the convention orientation-and-mobility instructors teach: *"Walkable path at 12 o'clock, straight ahead. Bench, 2 o'clock, about 4 metres. Leaves on the path at 11 o'clock. It may be slippery."* Guidance starts right after. Say "scan" (push-to-talk) or tap **Scan around me** to rescan.
+- **Big live view.** The camera fills the panel, in its real shape (portrait phone or landscape webcam). On top are drawn the walkable path (green), leaves (orange), detected objects and the step-around arrows. Under it, a plain-text readout replaces the old black stats box.
+- **Leaf litter detector** (`src/perception/ground.ts`, no ML, runs every 3rd frame). The ground is cut into cells; leaf litter is *busy* (texture above the surface you're walking on, adaptively) and *warm* (brown, orange, beige), never green. On Google's real photo it finds the leaf bank along the right edge, and flags nothing on the concrete path, the purple line, or Google's asphalt test frame. Leaves in your path get one spoken note (*"Leaves on the path ahead. Could be slippery."*), then quiet for 30 s.
+- **Real photo, walk mode** runs the same scan on Google's leafy-path photo. Result: *"Walkable path at 12 o'clock, straight ahead. Nothing in the way within a few metres. Leaves along the edge of the path."*
+- **Live run**: *Live: follow a painted line or track lane* opens the camera with the large live view. It uses the same pipeline as the simulator: Google's line model for purple lines, colour for others.
+
+### Voice: everything spoken, and accurate speech-to-text
+
+- **The voice menu** covers walk, live scan, run, practice (every simulator and the real photo), sound check and settings. After you stop, it comes back by itself.
+- **Recognition accuracy:**
+  - Each question only listens for its own answers. A small grammar like this is the biggest accuracy gain.
+  - It checks *all* the recogniser's alternatives, not just the first.
+  - Common mishearings count (*woke → walk, waste → waist, Kane → cane, paws → pause*), as do one-letter near misses of option words.
+  - A guess from a hesitant recogniser is confirmed (*"Did you mean Walk? Say yes or no."*). Exact matches act at once.
+  - First miss: it re-asks with the choices. Second miss: it explains the taps.
+- **Live captions.** What it hears appears on screen as you speak (*Hearing: "on my waist"*), in a large high-contrast caption.
+- **Push-to-talk while walking or running.** Use the **Speak a command** button, the **headphones' previous-track button** (eyes-free, works while worn), or the **V** key:
+  - Walk: *what's around me, scan, pause, resume, stop, louder, quieter, calmer, more detail*.
+  - Run: *stats, pause, resume, stop, louder, quieter*.
+  - The microphone opens only for those few seconds. Bluetooth headsets switch to call mode while it's open, and the first use says so.
+
 ### Practice and real-world tests (one dropdown)
 
 Home → *Practice and real-world tests*. The same dropdown is in the simulator panels, so you can switch between scenes while running.
@@ -206,7 +237,7 @@ Home → *Practice and real-world tests*. The same dropdown is in the simulator 
 The **walk simulator** feeds the real walk pipeline: object detector, Depth Anything virtual cane, path model, looming, cue policy and speech. Its autopilot is a blind walker who keeps to the path by feel (shorelining the grass edge), slows as the cane tone quickens, steps aside or stops **only** when EchoPath says so, and steps back after touching something. It scores obstacles in the way, avoided, bumps, head bumps and helper assists. Project Guideline's own simulator does not support obstacles yet (their README).
 
 - **Unrecognised obstacles** (a pole or bench the detector has no class for) are measured in 3D by depth. The step-around now steps **away from where depth measured it**, checked against the walkable path. Before this, the side came from a clutter guess, and in the simulator that sent the walker into a bench.
-- **Measured** (127 m, one run, about 6–8 fps on this laptop): 2 obstacles in the walking line, both avoided; 1 bump (an oncoming person while stepping round); 0 head bumps; 0 assists. Before the bench, reflex and depth-side fixes, a similar run had 5 bumps.
+- **Measured** (144 m, one run, 12–13 fps): 2 obstacles in the walking line, both avoided; 0 bumps; 0 head bumps; 0 assists. Only 4 distinct spoken messages. Before the bench, reflex and depth-side fixes, a similar run had 5 bumps. Runs vary because people move randomly.
 
 ### Voice menu (eyes-free)
 
@@ -267,7 +298,7 @@ camera ─▶ resize (canvas) ─▶ Web Worker: detect(frame) ─▶ filter (co
 - Worn chest mode with simulated walking (accelerometer events at 1.8 steps/s): detected as walking at 1.2 m/s, tilt −3°, controls hidden until pause, and "What's around me?" answered *"Person, ahead, about 5 metres, approaching."*
 - Track mode: see the measurements above.
 - Real-world check on Google's labelled photo: see Project Guideline above.
-- 154 unit tests.
+- 168 unit tests.
 
 ## Not yet verified / known gaps
 
@@ -280,8 +311,9 @@ camera ─▶ resize (canvas) ─▶ Web Worker: detect(frame) ─▶ filter (co
 - **Motion permission.** iPhones ask for motion access on the Start tap. Some embedded browsers deny it, and then walking detection is simply off.
 - **Looming detector.** Experimental, and not tested against real walls or glass. Featureless glass gives no signal.
 - **Bluetooth headphones** add ~100 ms or more of output latency. Use wired or low-latency earbuds for the demo.
-- **Following a slower walker.** In the walk simulator, catching up with someone walking the same way counts as a blockage. It produces repeated *step left* / *STOP* while you're at the path edge. A same-direction walker moving away should get a "follow / pass" cue instead of STOP. Not fixed yet.
-- **Walk pipeline speed.** About 6–8 fps on this laptop while the detector and Depth Anything share the GPU.
+- **Someone ahead walking your way** (fixed, unit-tested). While you walk, a person in your path who has been tracked for at least 0.8 s and is closing slower than 0.6 m/s is no longer a STOP. You hear *"Person ahead, walking your way. Pass on the left."* once. Within 1.2 m, when you're standing still, or when someone is coming toward you, it's still a STOP. A person just seen is never assumed safe. In the latest simulator run the cue didn't trigger: no simulated walker was tracked as slowly closing for long enough. So far it's verified by tests only.
+- **Walk pipeline speed** (fixed): 12–13 fps in the simulator on this laptop (detector about 50 ms). The earlier 6 fps was the simulator's own rendering cost, now cached, plus a few seconds on the slower detector model before it switches automatically.
+- **Live camera, microphone and gyroscope** couldn't be exercised in the development preview browser, which blocks the camera and microphone. The scan, leaf detector and voice matching were verified on Google's real photo and with unit tests. Try *Live* on a phone.
 - **Simulated imagery.** The walk and track simulators are flat-shaded renderings. The detector and depth model were trained on real photos, so the simulator understates or overstates some detections. The real-photo and real-video scenes are the check for that.
 
 ## Third-party notices

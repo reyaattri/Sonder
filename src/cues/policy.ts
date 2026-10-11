@@ -2,7 +2,7 @@ import type { DistanceBand, Zone } from '../core/types';
 import { CATEGORY_PRIORITY } from '../perception/classes';
 import { bandOf, bandRank, closeness, pulseRateHz } from '../perception/geometry';
 import { centerOverlap } from '../perception/zones';
-import type { Track } from '../perception/tracker';
+import { growthRate, type Track } from '../perception/tracker';
 import { chooseGuide, type PathModel } from '../perception/freespace';
 import type { LgmdOutput } from '../perception/lgmd';
 
@@ -23,7 +23,14 @@ export interface PolicyEnv {
    * pole or bench the object detector has no name for.
    */
   depthObstacle?: { x: number; z: number } | null;
+  /** The wearer is walking (motion sensor). Enables "walking your way" for people ahead. */
+  walking?: boolean;
 }
+
+/** Closing speed below this (m/s) = someone ahead walking the same way as you. */
+const PACING_CLOSING_MS = 0.6;
+/** ...unless they're this close: then it's a blockage again. */
+const PACING_MIN_M = 1.2;
 
 /** Lateral clearance needed to pass someone: about body width plus a margin (metres). */
 const PASS_CLEARANCE_M = 0.6;
@@ -105,6 +112,11 @@ export interface PolicyOutput {
   guideFrom: 'path' | 'clutter' | null;
   /** Sector where the looming pathway fired with no recognised object to explain it. */
   unexplainedLooming: Zone | null;
+  /**
+   * A person ahead walking the same way (slowly closing): not a blockage.
+   * Follow them, or pass on `side`.
+   */
+  pacing: { trackId: number; distance: number; side: 'left' | 'right' | null } | null;
 }
 
 /**
@@ -117,6 +129,8 @@ export interface PolicyOutput {
  *   guide tone toward the freer side (US-3.2).
  * - Priority: blocked > guide > vehicles > people > static.
  */
+const passSide = (d: string): 'left' | 'right' | null => (d === 'left' || d === 'right' ? d : null);
+
 export class CuePolicy {
   private state = new Map<number, TrackCueState>();
   private lastBlockedSeen = -Infinity;
@@ -148,9 +162,19 @@ export class CuePolicy {
     for (const id of this.state.keys()) if (!liveIds.has(id)) this.state.delete(id);
 
     // --- Blocked path -------------------------------------------------------
-    const blockers = live
-      .filter((t) => centerOverlap(t.box, cfg.centerWidth) >= BLOCK_CENTER_OVERLAP)
-      .sort((a, b) => a.distance - b.distance);
+    // Someone ahead walking your way closes slowly: follow or pass, don't stop.
+    // Needs positive evidence: at least ~0.8 s of size history showing a slow
+    // closing speed. A person just seen (no history yet) is never assumed safe.
+    const isPacing = (t: Track) => {
+      if (!env.walking || t.category !== 'person' || !(t.distance >= PACING_MIN_M) || !Number.isFinite(t.distance)) return false;
+      const hist = t.history;
+      if (hist.length < 5 || hist[hist.length - 1].t - hist[0].t < 800) return false;
+      const rate = growthRate(hist); // apparent size h = 1/distance, so closing speed = rate * d^2
+      return rate !== null && Math.max(0, rate) * t.distance * t.distance < PACING_CLOSING_MS;
+    };
+    const inPath = live.filter((t) => centerOverlap(t.box, cfg.centerWidth) >= BLOCK_CENTER_OVERLAP);
+    const blockers = inPath.filter((t) => !isPacing(t)).sort((a, b) => a.distance - b.distance);
+    const pacer = inPath.filter(isPacing).sort((a, b) => a.distance - b.distance)[0];
     const nearest = blockers[0];
     const releaseDist = cfg.blockDistance * 1.15; // hysteresis
     const blockingNow =
@@ -353,6 +377,14 @@ export class CuePolicy {
       noWayAround,
       guideFrom,
       unexplainedLooming,
+      pacing:
+        pacer && pacer.distance < cfg.blockDistance * 1.5
+          ? {
+              trackId: pacer.id,
+              distance: pacer.distance,
+              side: env.path ? passSide(chooseGuide(env.path, pacer.box, 0.12, null)) : this.freerSide(live, pacer.id),
+            }
+          : null,
     };
   }
 

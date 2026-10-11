@@ -1,5 +1,6 @@
 import type { FrameReport } from '../app/session';
 import { COLS, ROI_TOP, ROWS } from '../perception/freespace';
+import { G_TOP, GCOLS, GROWS } from '../perception/ground';
 
 const COLORS = { person: '#ffd60a', vehicle: '#ff4d6d', static: '#4cc9f0' } as const;
 
@@ -56,6 +57,20 @@ export function drawOverlay(canvas: HTMLCanvasElement, video: HTMLVideoElement, 
         g.fillRect(x, y, w / COLS + 0.5, (h * (1 - ROI_TOP)) / ROWS + 0.5);
       }
   }
+  // Leaf litter: orange cells, outlined so they read on top of the path tint.
+  if (r.ground) {
+    g.fillStyle = 'rgba(255, 140, 0, 0.45)';
+    g.strokeStyle = 'rgba(255, 170, 40, 0.9)';
+    g.lineWidth = 1;
+    const cw = w / GCOLS, ch = (h * (1 - G_TOP)) / GROWS;
+    for (let row = 0; row < GROWS; row++)
+      for (let c = 0; c < GCOLS; c++) {
+        if (!r.ground.leaves[row * GCOLS + c]) continue;
+        const x = X(c / GCOLS), y = Y(G_TOP + (row / GROWS) * (1 - G_TOP));
+        g.fillRect(x, y, cw, ch);
+        g.strokeRect(x + 0.5, y + 0.5, cw - 1, ch - 1);
+      }
+  }
   // Looming pathway: per-sector excitation bars along the top.
   if (r.lgmd) {
     (['left', 'center', 'right'] as const).forEach((sec, i) => {
@@ -101,24 +116,8 @@ export function drawOverlay(canvas: HTMLCanvasElement, video: HTMLVideoElement, 
     g.fillText(arrow, r.policy.guideSide === 'left' ? X(0.03) : X(0.97) - 48, Y(0.5));
   }
 
-  const st = r.stats;
-  const lines = [
-    `${st.fps.toFixed(1)} FPS · infer ${fmt(st.inferenceP50)} ms`,
-    `capture→sound p95 ${fmt(st.latencyP95)} ms (n=${st.latencySamples})`,
-    `${st.model} @${st.inputWidth}px · ${st.backend} · ${st.where}`,
-    `sources: ${r.policy.sources.map((s) => s.kind).join(', ') || 'none'}${r.quality !== 'ok' ? ' · ' + r.quality.toUpperCase() : ''}`,
-  ];
-  // Stats sit top-left, under the Settings/Stop buttons and clear of the pause label.
-  g.font = '600 14px ui-monospace, monospace';
-  const boxH = lines.length * 19 + 10;
-  const sy = 76;
-  g.fillStyle = 'rgba(0,0,0,0.8)';
-  g.fillRect(6, sy, Math.min(cw - 12, 380), boxH);
-  g.fillStyle = '#fff';
-  lines.forEach((l, i) => g.fillText(l, 12, sy + 18 + i * 19));
+  // Stats are shown as text under the view, never over the picture.
 }
-
-const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(0) : '–');
 
 export function clearOverlay(canvas: HTMLCanvasElement): void {
   canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);

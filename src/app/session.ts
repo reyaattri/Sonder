@@ -12,6 +12,8 @@ import { pathDebris, PathEstimator, type PathModel } from '../perception/freespa
 import { classInfo } from '../perception/classes';
 import { nextGuidance, type GuidanceKey } from '../cues/guidance';
 import { SceneMemory } from '../perception/sceneMemory';
+import { groundMap, type GroundMap } from '../perception/ground';
+import { LiveScan } from '../perception/liveScan';
 import type { DepthClient } from '../depth/client';
 import { alignToGround, occupancy, type Occupancy } from '../depth/metric';
 import { effectiveFov as effFov } from '../perception/geometry';
@@ -35,6 +37,10 @@ export interface FrameReport {
   depth: Occupancy | null;
   /** Walkable-path model (for drawing). */
   path: PathModel | null;
+  /** Leaf-litter map of the ground (for drawing and the scan). */
+  ground: GroundMap | null;
+  /** Scan-around-you progress while scanning. */
+  scan: { progress: number; sweptDeg: number } | null;
   quality: FrameQuality;
   motion: MotionSnapshot | null;
   stats: ReturnType<Metrics['snapshot']> & { backend: string; where: string; inputWidth: number; model: string };
@@ -103,6 +109,14 @@ export class Session {
   private lastHazardCue = -Infinity;
   private lastHazardSaid = -Infinity;
   private pathEst = new PathEstimator();
+  private groundCanvas = document.createElement('canvas');
+  private groundState: GroundMap | null = null;
+  private leafFrames = 0;
+  private lastLeavesSaid = -Infinity;
+  private lastPacingId = -1;
+  /** "Scan around you" (Live View style); set onScanDone to receive the summary. */
+  readonly scan = new LiveScan();
+  onScanDone: ((lines: string[]) => void) | null = null;
   private lastGuideSaid: GuidanceKey = null;
   private lastGuideSpeech = -Infinity;
   private governor: QualityGovernor;
@@ -346,6 +360,18 @@ export class Session {
     tc.setTransform(this.mirror ? -1 : 1, 0, 0, 1, this.mirror ? tw : 0, 0);
     tc.drawImage(video, 0, 0, tw, th);
     const thumbPx = tc.getImageData(0, 0, tw, th).data;
+    // Ground hazards (leaf litter) need a little more detail: 160 px, every 3rd frame.
+    if (this.frameCount % 3 === 0) {
+      const gw = 160, gh = Math.max(1, Math.round((160 * vh) / vw));
+      if (this.groundCanvas.width !== gw || this.groundCanvas.height !== gh) {
+        this.groundCanvas.width = gw;
+        this.groundCanvas.height = gh;
+      }
+      const gc = this.groundCanvas.getContext('2d', { willReadFrequently: true })!;
+      gc.setTransform(this.mirror ? -1 : 1, 0, 0, 1, this.mirror ? gw : 0, 0);
+      gc.drawImage(video, 0, 0, gw, gh);
+      this.groundState = groundMap(gc.getImageData(0, 0, gw, gh).data, gw, gh);
+    }
     const gray = toGray(thumbPx, tw, th);
     if (this.frameCount % 10 === 0) this.updateQuality(frameQuality(gray), captureT);
     // Locust-inspired looming pathway: harder to trigger while walking (the
@@ -413,6 +439,7 @@ export class Session {
         path,
         lgmd,
         depthObstacle: depth?.center && depth.center.z < s.blockDistance ? depth.center : null,
+        walking: !!motion?.walking,
         loomingCenter:
           !!depth?.center &&
           depth.center.z < s.blockDistance &&
@@ -420,8 +447,28 @@ export class Session {
       },
     );
     this.updateCane(depth, s, captureT);
-    this.checkGround(depth, path, captureT);
-    this.speakGuidance(policy, tracks, captureT);
+    // While scanning, the scan summary does the talking.
+    if (this.scan.active) {
+      const yaw = this.motion?.available ? this.motion.yaw : 0;
+      const fovR = (effectiveFov(s.fovDeg, this.source?.zoom) * Math.PI) / 180;
+      const hfov = 2 * Math.atan(Math.tan(fovR / 2) * (vw / Math.max(vw, vh)));
+      this.scan.add({ yaw, hfov, path, tracks, ground: this.groundState, depth });
+      if (this.scan.progress(captureT) >= 1) {
+        const lines = this.scan.summary(yaw);
+        this.announcer.say(`Scan complete. ${lines.join(' ')}`, { interrupt: true });
+        this.logSystem('scan complete');
+        this.onScanDone?.(lines);
+      }
+    } else {
+      this.checkGround(depth, path, captureT);
+      this.speakGuidance(policy, tracks, captureT);
+      // Someone ahead walking your way: say it once per person, no STOP.
+      const pace = policy.pacing;
+      if (pace && pace.trackId !== this.lastPacingId && !policy.blocked && s.verbosity !== 'off') {
+        this.lastPacingId = pace.trackId;
+        this.announcer.say(`Person ahead, walking your way.${pace.side ? ` Pass on the ${pace.side}.` : ' Follow behind.'}`, { system: false, priority: 1 });
+      }
+    }
     const looming = policy.unexplainedLooming !== null;
 
     // --- Audio ----------------------------------------------------------------
@@ -510,6 +557,8 @@ export class Session {
       lgmd,
       depth,
       path,
+      ground: this.groundState,
+      scan: this.scan.active ? { progress: this.scan.progress(captureT), sweptDeg: this.scan.sweptDeg } : null,
       quality: this.quality,
       motion,
       stats: {
@@ -641,6 +690,15 @@ export class Session {
    * every 12 s (through the speech limiter).
    */
   private checkGround(depth: Occupancy | null, path: PathModel, now: number): void {
+    // Leaf litter on the path ahead: a short note when it first appears (persisting ~6 frames), then quiet.
+    const g = this.groundState;
+    this.leafFrames = g && g.corridor > 0.15 ? this.leafFrames + 1 : 0;
+    if (this.leafFrames === 6 && now - this.lastLeavesSaid > 30000 && this.settings.verbosity !== 'off') {
+      this.lastLeavesSaid = now;
+      const x = g!.aheadX ?? 0.5;
+      this.audio.groundCue((x - 0.5) * 1.1);
+      this.announcer.say(`Leaves on the path${x < 0.42 ? ' ahead on the left' : x > 0.58 ? ' ahead on the right' : ' ahead'}. Could be slippery.`, { system: false, priority: 1 });
+    }
     const rock = depth?.low ?? null;
     const debris = rock ? null : pathDebris(path);
     if (!rock && !debris) {
@@ -661,6 +719,13 @@ export class Session {
         { system: false, priority: 1 },
       );
     }
+  }
+
+  /** Start the "scan around you" step (about 9 seconds). */
+  startScan(): void {
+    this.scan.start(performance.now(), this.motion?.available ? this.motion.yaw : 0);
+    this.announcer.say('Scanning. Hold the phone at chest height, camera facing out. Turn slowly to your left, then to your right, then face forward.', { interrupt: true });
+    this.logSystem('scan started');
   }
 
   /** How well depth lined up with the ground last time (0..1); low = no metric depth. */

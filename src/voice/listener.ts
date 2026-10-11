@@ -1,15 +1,17 @@
 /**
- * Speech recognition for the voice menu (Web Speech API). Chrome and Edge
- * support it; Safari partly; Firefox not. Listening opens the microphone,
- * which can switch Bluetooth headsets into mono call mode for a moment, so
- * the app only listens in menus, never during guidance.
+ * Speech recognition (Web Speech API). Chrome and Edge support it; Safari
+ * partly; Firefox not. Listening opens the microphone, which can switch
+ * Bluetooth headsets into mono call mode for a moment, so the app listens
+ * only in menus and on push-to-talk, never continuously during guidance.
  */
+type Alt = { transcript: string; confidence: number };
+type Result = ArrayLike<Alt> & { isFinal?: boolean };
 type Rec = {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
   maxAlternatives: number;
-  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string; confidence: number }>> }) => void) | null;
+  onresult: ((e: { resultIndex?: number; results: ArrayLike<Result> }) => void) | null;
   onerror: ((e: { error: string }) => void) | null;
   onend: (() => void) | null;
   start(): void;
@@ -17,8 +19,10 @@ type Rec = {
 };
 
 export interface Heard {
-  /** All alternatives joined (the parser looks for keywords in any of them). */
+  /** All alternatives joined (kept for older callers). */
   text: string;
+  /** Every alternative the recogniser offered, best first. */
+  alternatives: string[];
   confidence: number;
 }
 
@@ -32,8 +36,11 @@ export class Listener {
     return !this.denied && !!(w.SpeechRecognition || w.webkitSpeechRecognition);
   }
 
-  /** Listen once. Resolves null on silence, error, or timeout. */
-  listen(timeoutMs = 6000): Promise<Heard | null> {
+  /**
+   * Listen once. Resolves null on silence, error, or timeout.
+   * `onInterim` receives the words as they are recognised (live captions).
+   */
+  listen(timeoutMs = 6000, onInterim?: (text: string) => void): Promise<Heard | null> {
     if (!this.supported) return Promise.resolve(null);
     const w = window as unknown as { SpeechRecognition?: new () => Rec; webkitSpeechRecognition?: new () => Rec };
     const Ctor = (w.SpeechRecognition ?? w.webkitSpeechRecognition)!;
@@ -42,10 +49,11 @@ export class Listener {
     this.rec = rec;
     rec.lang = navigator.language || 'en-US';
     rec.continuous = false;
-    rec.interimResults = false;
-    rec.maxAlternatives = 4;
+    rec.interimResults = true;
+    rec.maxAlternatives = 5;
     return new Promise((resolve) => {
       let done = false;
+      let lastInterim = '';
       const finish = (h: Heard | null) => {
         if (done) return;
         done = true;
@@ -57,16 +65,25 @@ export class Listener {
         }
         resolve(h);
       };
-      const timer = window.setTimeout(() => finish(null), timeoutMs);
+      const timer = window.setTimeout(() => finish(lastInterim ? fromText(lastInterim) : null), timeoutMs);
       rec.onresult = (e) => {
-        const alts = Array.from(e.results[0] ?? []);
-        finish({ text: alts.map((a) => a.transcript).join(' | '), confidence: alts[0]?.confidence ?? 0 });
+        const results = Array.from(e.results);
+        const final = results.find((r) => r.isFinal);
+        if (final) {
+          const alts = Array.from(final).filter((a) => a.transcript.trim());
+          if (alts.length)
+            finish({ text: alts.map((a) => a.transcript).join(' | '), alternatives: alts.map((a) => a.transcript), confidence: alts[0].confidence ?? 0 });
+          return;
+        }
+        lastInterim = results.map((r) => r[0]?.transcript ?? '').join(' ').trim();
+        if (lastInterim) onInterim?.(lastInterim);
       };
       rec.onerror = (e) => {
         if (e.error === 'not-allowed' || e.error === 'service-not-allowed') this.denied = true;
         finish(null);
       };
-      rec.onend = () => finish(null);
+      // Ended without a final result: use what we had heard so far.
+      rec.onend = () => finish(lastInterim ? fromText(lastInterim) : null);
       try {
         rec.start();
       } catch {
@@ -84,3 +101,5 @@ export class Listener {
     this.rec = null;
   }
 }
+
+const fromText = (t: string): Heard => ({ text: t, alternatives: [t], confidence: 0.4 });

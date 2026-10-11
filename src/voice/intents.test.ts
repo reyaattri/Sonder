@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseIntent } from './intents';
+import { matchIntent, parseIntent } from './intents';
 
 describe('voice command understanding', () => {
   it('main choices, in natural phrasing', () => {
@@ -33,5 +33,32 @@ describe('voice command understanding', () => {
     expect(parseIntent('too many beeps')).toBe('calmer');
     expect(parseIntent('turn on the white cane')).toBe('caneOn');
     expect(parseIntent('echolocation')).toBe('echoOn');
+  });
+});
+
+describe('accurate speech matching (all alternatives, small grammar, mishearings)', () => {
+  const MAIN = ['walk', 'run', 'live', 'simulator', 'sound', 'settings', 'back', 'help'] as const;
+  it('takes the first alternative that fits this question', () => {
+    expect(matchIntent(['banana bread', 'i want to walk'], [...MAIN])).toEqual({ intent: 'walk', exact: true, said: 'i want to walk' });
+  });
+  it('common mishearings count, flagged as not exact', () => {
+    expect(matchIntent(['woke'], [...MAIN])).toMatchObject({ intent: 'walk', exact: false });
+    expect(matchIntent(['on my waste'], ['chest', 'waist', 'hand', 'table'])).toMatchObject({ intent: 'waist', exact: false });
+    expect(matchIntent(['turn on the kane'], ['caneOn', 'caneOff', 'done'])).toMatchObject({ intent: 'caneOn', exact: false });
+  });
+  it('one-letter near misses of option words, only when one option fits', () => {
+    expect(matchIntent(['setings'], [...MAIN])).toMatchObject({ intent: 'settings', exact: false });
+    expect(matchIntent(['simulater'], [...MAIN])).toMatchObject({ intent: 'simulator', exact: false });
+  });
+  it('words that fit no option at this step are not forced into one', () => {
+    expect(matchIntent(['chest'], [...MAIN])).toBeNull();
+    expect(matchIntent(['purple elephant'], [...MAIN])).toBeNull();
+  });
+  it('running commands', () => {
+    const CMDS = ['describe', 'scan', 'pause', 'resume', 'stop', 'louder', 'quieter', 'stats', 'help'] as const;
+    expect(matchIntent(["what's around me"], [...CMDS])?.intent).toBe('describe');
+    expect(matchIntent(['scan again'], [...CMDS])?.intent).toBe('scan');
+    expect(matchIntent(['how far have I gone'], [...CMDS])?.intent).toBe('stats');
+    expect(matchIntent(['paws'], [...CMDS])).toMatchObject({ intent: 'pause', exact: false });
   });
 });

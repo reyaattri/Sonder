@@ -33,10 +33,26 @@ export type Intent =
   | 'echoOff'
   | 'done'
   | 'yes'
-  | 'no';
+  | 'no'
+  | 'live'
+  | 'scan'
+  | 'describe'
+  | 'pause'
+  | 'resume'
+  | 'stop'
+  | 'stats'
+  | 'photo';
 
 const WORDS: [Intent, string[]][] = [
   // Multi-word phrases first (they win over single words).
+  ['describe', ["what's around me", 'whats around me', 'what is around me', 'what is around', "what's around", 'describe', 'what do you see', 'what can you see', "what's ahead", 'what is ahead', 'whats ahead']],
+  ['scan', ['scan around me', 'scan again', 'scan', 'look around', 'rescan']],
+  ['live', ['live view', 'live mode', 'live', 'real world', 'use the camera', 'camera']],
+  ['photo', ['real photo', 'photo', 'picture', 'google photo']],
+  ['stats', ['my stats', 'stats', 'statistics', 'my pace', 'pace', 'how far', 'distance', 'heart rate', 'how am i doing']],
+  ['resume', ['resume', 'continue', 'carry on', 'unpause', 'keep going']],
+  ['pause', ['pause', 'hold on', 'wait']],
+  ['stop', ['stop', 'end', 'finish', 'quit', 'stop guidance']],
   ['surroundOff', ['surround off', 'turn off surround', 'no surround', 'stop surround']],
   ['surroundOn', ['surround on', 'turn on surround', 'surround sound', 'surround', '8d', 'eight d']],
   ['caneOff', ['cane off', 'turn off cane', 'no cane', 'stop cane']],
@@ -66,6 +82,97 @@ const WORDS: [Intent, string[]][] = [
   ['yes', ['i understand', 'understood', 'agree', 'i agree', 'yes', 'yeah', 'yep', 'correct', 'i heard it', 'ok', 'okay']],
   ['no', ['no', 'nope', "didn't", 'did not', 'not really']],
 ];
+
+/**
+ * What speech recognisers commonly hear instead of our words (accents, noise,
+ * Bluetooth call-quality microphones). Applied only as a second pass.
+ */
+const SOUNDS_LIKE: Record<string, string> = {
+  woke: 'walk', wok: 'walk', wark: 'walk', wolk: 'walk', walks: 'walk', walked: 'walk',
+  ron: 'run', rum: 'run', ran: 'run', runs: 'run', rhon: 'run',
+  chess: 'chest', chests: 'chest', jest: 'chest',
+  waste: 'waist', waists: 'waist', wasted: 'waist',
+  cain: 'cane', kane: 'cane', canes: 'cane',
+  eco: 'echo', ekko: 'echo', echoes: 'echo',
+  lane: 'lanes', laines: 'lanes',
+  lion: 'line', lime: 'line', lines: 'line',
+  star: 'start', starts: 'start', started: 'start',
+  lauder: 'louder', loader: 'louder', lowder: 'louder',
+  quiet: 'quieter', quieted: 'quieter',
+  yeah: 'yes', yah: 'yes', yas: 'yes', yup: 'yes', sure: 'yes',
+  know: 'no', nah: 'no',
+  cable: 'table', tables: 'table',
+  scam: 'scan', scans: 'scan', skin: 'scan',
+  paws: 'pause', pours: 'pause', pores: 'pause', paused: 'pause',
+  stops: 'stop', stopped: 'stop',
+  sats: 'stats', stat: 'stats',
+  dun: 'done', don: 'done',
+  hep: 'help', helps: 'help',
+};
+
+/** Levenshtein distance, early exit above `max`. */
+function editDistance(a: string, b: string, max = 2): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      rowMin = Math.min(rowMin, cur[j]);
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+export interface Match {
+  intent: Intent;
+  /** False when it took a sound-alike or near-miss to match: worth confirming. */
+  exact: boolean;
+  /** The alternative that matched. */
+  said: string;
+}
+
+/**
+ * Best intent from ALL the recogniser's alternatives, limited to what makes
+ * sense at this step (a small grammar is what makes recognition accurate):
+ *   1. exact keyword match, best alternative first;
+ *   2. the same after common mishearings (woke -> walk, waste -> waist);
+ *   3. one-letter near-misses of option words (5+ letters, two edits for 7+),
+ *      only when exactly one option fits.
+ */
+export function matchIntent(alternatives: string[], allowed: Intent[]): Match | null {
+  const alts = alternatives.map((a) => a.trim()).filter(Boolean);
+  for (const a of alts) {
+    const i = parseIntent(a, allowed);
+    if (i) return { intent: i, exact: true, said: a };
+  }
+  for (const a of alts) {
+    const fixed = normalise(a)
+      .trim()
+      .split(' ')
+      .map((w) => SOUNDS_LIKE[w] ?? w)
+      .join(' ');
+    const i = parseIntent(fixed, allowed);
+    if (i) return { intent: i, exact: false, said: a };
+  }
+  for (const a of alts) {
+    const words = normalise(a).trim().split(' ').filter((w) => w.length >= 4);
+    const found = new Set<Intent>();
+    for (const [intent, phrases] of WORDS) {
+      if (!allowed.includes(intent)) continue;
+      for (const p of phrases) {
+        if (p.includes(' ') || p.length < 5) continue;
+        const max = p.length >= 7 ? 2 : 1;
+        if (words.some((w) => editDistance(w, p, max) <= max)) found.add(intent);
+      }
+    }
+    if (found.size === 1) return { intent: [...found][0], exact: false, said: a };
+  }
+  return null;
+}
 
 export function normalise(text: string): string {
   return ` ${text.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim()} `;

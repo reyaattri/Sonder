@@ -1,8 +1,8 @@
 import type { AudioEngine } from '../audio/engine';
 import type { Settings } from '../core/settings';
 import type { Announcer } from '../speech/announcer';
-import { parseIntent, type Intent } from './intents';
-import type { Listener } from './listener';
+import { matchIntent, type Intent } from './intents';
+import type { Heard, Listener } from './listener';
 
 /**
  * Eyes-free voice menu. Every step SPEAKS its question and options, then
@@ -38,6 +38,10 @@ export interface MenuDeps {
   startWalk: () => void;
   startTrack: () => void;
   startSimulator: () => void;
+  /** Live camera: scan around you, then walk. */
+  startLiveWalk: () => void;
+  /** Any practice scene from the dropdown (walk, stadium, road, purple, pg-photo, photo-walk). */
+  startScene: (scene: string) => void;
   soundCheck: () => Promise<void>;
   render: (step: MenuStep, highlighted: number, heard: string) => void;
   /** Leave the voice menu (guidance started, or the visual menu chosen). */
@@ -70,11 +74,21 @@ export class VoiceMenu {
       activity: {
         id: 'activity',
         title: 'What would you like to do?',
-        prompt: 'What would you like to do? Walk, or run on a track.',
+        prompt: 'What would you like to do? Walk, live scan, run, or practice.',
         options: [
           { label: 'Walk', intents: ['walk'], run: () => (d.update({ activity: 'walk' }), this.open('mount')) },
+          {
+            label: 'Live: scan around me, then walk',
+            intents: ['live', 'scan'],
+            run: () => {
+              d.update({ activity: 'walk' });
+              if (!d.getSettings().disclaimerAccepted) return this.open('disclaimer');
+              this.close();
+              d.startLiveWalk();
+            },
+          },
           { label: 'Run on a track', intents: ['run', 'lanes'], run: () => (d.update({ activity: 'track' }), this.open('course')) },
-          { label: 'Practice running in the simulator', intents: ['simulator'], run: () => (this.close(), d.startSimulator()) },
+          { label: 'Practice', intents: ['simulator', 'photo'], run: go('practice') },
           { label: 'Sound check', intents: ['sound'], run: () => this.soundCheck() },
           { label: 'Settings', intents: ['settings'], run: go('settings') },
         ],
@@ -133,11 +147,25 @@ export class VoiceMenu {
             intents: ['yes', 'start', 'done'],
             run: () => {
               d.update({ disclaimerAccepted: true, headphoneCheckDone: true });
+              const fromLive = this.stack.includes('activity') && this.stack[this.stack.length - 1] === 'activity';
               this.close();
               if (d.getSettings().activity === 'track') d.startTrack();
+              else if (fromLive) d.startLiveWalk();
               else d.startWalk();
             },
           },
+        ],
+      },
+      practice: {
+        id: 'practice',
+        title: 'Practice',
+        prompt: 'Practice. Walk simulator, track simulator, purple line, or real photo.',
+        options: [
+          { label: 'Walk simulator: obstacles and people', intents: ['walk'], run: () => (this.close(), d.startScene('walk')) },
+          { label: 'Track simulator: 400 metre track', intents: ['run', 'lanes'], run: () => (this.close(), d.startScene('stadium')) },
+          { label: 'Purple guide line, Google model', intents: ['line'], run: () => (this.close(), d.startScene('purple')) },
+          { label: 'Real photo from Google Project Guideline', intents: ['photo', 'live'], run: () => (this.close(), d.startScene('photo-walk')) },
+          { label: 'Back', intents: ['done'], run: () => this.back() },
         ],
       },
       settings: {
@@ -180,6 +208,7 @@ export class VoiceMenu {
   open(id: string, push = true): void {
     const step = this.steps()[id];
     if (!step) return;
+    this.misses = 0;
     if (push && this.step && this.step.id !== id) this.stack.push(this.step.id);
     this.step = step;
     this.hi = 0;
@@ -211,38 +240,67 @@ export class VoiceMenu {
     await this.d.announcer.whenIdle();
     if (token !== this.listening || !this.active) return;
     this.d.audio.earcon('tick'); // "I'm listening"
-    const heard = await this.d.listener.listen(6000);
+    this.d.render(this.step, this.hi, 'Listening…');
+    const step = this.step;
+    const heard = await this.d.listener.listen(7000, (t) => {
+      if (token === this.listening && this.step === step) this.d.render(step, this.hi, `Hearing: "${t}"`);
+    });
     if (token !== this.listening || !this.active) return;
     if (!heard) {
-      // Silence: say how to answer, once, and keep listening quietly.
+      // Silence: keep the screen calm; taps still work.
       this.d.render(this.step, this.hi, '');
       return;
     }
-    this.handleSpeech(heard.text);
+    this.handleSpeech(heard);
   }
 
-  private handleSpeech(text: string): void {
+  /** Consecutive answers not understood at this step. */
+  private misses = 0;
+
+  private handleSpeech(heard: Heard): void {
     const st = this.step!;
     const allowed = [...new Set([...st.options.flatMap((o) => o.intents), ...GLOBAL])];
-    const intent = parseIntent(text.split('|')[0], allowed) ?? parseIntent(text.replace(/\|/g, ' '), allowed);
-    const shown = text.split('|')[0].trim();
-    if (!intent) {
+    const m = matchIntent(heard.alternatives, allowed);
+    const shown = heard.alternatives[0]?.trim() ?? '';
+    if (!m) {
+      this.misses++;
       this.d.render(st, this.hi, `Heard: "${shown}"`);
       this.d.audio.earcon('attention');
-      this.d.announcer.say(
-        `Sorry, I didn't understand. Tap once for ${st.options[this.hi].label}. Press and hold for other options. Double-tap to go back.`,
-        { interrupt: true, system: false, priority: 0 },
-      );
+      // First miss: ask again with the choices. Then explain the taps.
+      const say =
+        this.misses === 1
+          ? `Sorry, I didn't catch that. You can say: ${st.options.map((o) => o.label).join(', ')}.`
+          : `Sorry, I still didn't understand. Tap once for ${st.options[this.hi].label}. Press and hold for other options. Double-tap to go back.`;
+      this.d.announcer.say(say, { interrupt: true, system: false, priority: 0 });
       void this.listen();
       return;
     }
-    if (intent === 'back') return this.back();
-    if (intent === 'help') return this.speakStep(`Heard: "${shown}"`);
-    const opt = st.options.find((o) => o.intents.includes(intent));
-    if (opt) {
-      this.d.render(st, st.options.indexOf(opt), `Heard: "${shown}"`);
-      void opt.run();
-    }
+    this.misses = 0;
+    if (m.intent === 'back') return this.back();
+    if (m.intent === 'help') return this.speakStep(`Heard: "${shown}"`);
+    const opt = st.options.find((o) => o.intents.includes(m.intent));
+    if (!opt) return;
+    // A guess (sound-alike or near miss) from a hesitant recogniser: check first.
+    if (!m.exact && heard.confidence < 0.6 && st.id !== 'confirm') return this.confirm(opt, m.said);
+    this.d.render(st, st.options.indexOf(opt), `Heard: "${shown}"`);
+    void opt.run();
+  }
+
+  private confirm(opt: MenuOption, said: string): void {
+    const back = this.step!;
+    this.step = {
+      id: 'confirm',
+      title: `Did you mean ${opt.label}?`,
+      prompt: `Did you mean ${opt.label}? Say yes or no.`,
+      options: [
+        { label: `Yes, ${opt.label}`, intents: ['yes'], run: () => ((this.step = back), void opt.run()) },
+        { label: 'No', intents: ['no', 'back'], run: () => ((this.step = back), this.speakStep()) },
+      ],
+    };
+    this.hi = 0;
+    this.d.render(this.step, 0, `Heard: "${said}"`);
+    this.d.announcer.say(this.step.prompt, { interrupt: true, system: false, priority: 0 });
+    void this.listen();
   }
 
   // ---- gestures ------------------------------------------------------------

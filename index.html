@@ -101,10 +101,14 @@
       </div>
       <button id="btn-voice-menu" type="button">Voice menu (eyes-free)</button>
       <section class="card" aria-labelledby="practice-title">
-        <h2 id="practice-title">Practice and real-world tests</h2>
-        <p class="hint">No need to go outside: run EchoPath's real pipeline on a simulated world, or on real footage.</p>
+        <h2 id="practice-title">Live, practice and real-world tests</h2>
+        <p class="hint">Live uses your camera in the real world, like Google Maps Live View: scan around you, then walk. Or practise on a simulated world or real footage.</p>
         <label class="field">Scene
           <select id="practice-scene">
+            <optgroup label="Live, real world (your camera)">
+              <option value="live-walk">Live: scan around you, then walk</option>
+              <option value="live-run">Live: follow a painted line or track lane</option>
+            </optgroup>
             <optgroup label="Simulation (real EchoPath pipeline, simulated world)">
               <option value="walk">Walk: park path with poles, bins, benches, rocks, leaves, people</option>
               <option value="stadium">Run: 400 m track, lane 3</option>
@@ -113,6 +117,7 @@
             </optgroup>
             <optgroup label="Real world (real footage, not simulated)">
               <option value="pg-photo">Real photo: Google Project Guideline test path, checked against Google's labels</option>
+              <option value="photo-walk">Real photo, walk mode: the same leafy path (scan, leaves, path)</option>
               <option value="video-walk">Real video: your own walking recording</option>
               <option value="video-run">Real video: your own running recording</option>
             </optgroup>
@@ -250,9 +255,12 @@
         <p class="banner" id="banner" aria-hidden="true" hidden></p>
       </div>
       <p class="gesture" id="gesture-hint"></p>
+      <p class="voice-caption" id="cmd-caption" aria-live="polite" hidden></p>
       <div class="controls" id="controls">
         <button id="btn-pause" class="big primary" type="button">Pause</button>
         <button id="btn-describe" class="big" type="button">What's around me?</button>
+        <button id="btn-scan" class="big" type="button">Scan around me</button>
+        <button id="btn-voice-cmd" class="big" type="button">Speak a command</button>
         <div class="row2">
           <button id="btn-settings-run" type="button">Settings</button>
           <button id="btn-stop" type="button">Stop</button>
@@ -309,9 +317,11 @@
         <div><dt>Laps</dt><dd id="m-laps">0</dd></div>
       </dl>
       <p class="gesture" id="track-hint">Press and hold anywhere to pause. Double-tap to hear your stats.</p>
+      <p class="voice-caption" id="tcmd-caption" aria-live="polite" hidden></p>
       <div class="controls" id="track-controls">
         <button id="btn-tpause" class="big primary" type="button">Pause</button>
         <button id="btn-tstats" class="big" type="button">Say my stats</button>
+        <button id="btn-tvoice-cmd" type="button">Speak a command</button>
         <div class="row2">
           <button id="btn-tsettings" type="button">Settings</button>
           <button id="btn-tstop" type="button">Stop</button>

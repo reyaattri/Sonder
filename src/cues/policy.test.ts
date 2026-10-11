@@ -241,3 +241,32 @@ describe('unrecognised obstacle measured by depth (a pole, a bench)', () => {
     expect(left.guideSide).toBe('right');
   });
 });
+
+describe('someone ahead walking your way', () => {
+  /** A person seen for 1 s, closing at the given speed (m/s) (size history h = 1/distance). */
+  const ahead = (distance: number, closing: number, seenMs = 1000) => {
+    const history = Array.from({ length: 8 }, (_, i) => {
+      const t = (i / 7) * seenMs;
+      return { t, h: 1 / (distance + closing * ((seenMs - t) / 1000)) };
+    });
+    const ttc = closing > 0 ? distance / closing : Infinity;
+    return { ...track(7, { zone: 'center', distance }), history, ttc, approaching: ttc < 10 };
+  };
+  it('slowly closing while you walk: no STOP, follow or pass', () => {
+    const o = new CuePolicy().update([ahead(1.8, 0.3)], 0, cfg, { walking: true });
+    expect(o.blocked).toBe(false);
+    expect(o.pacing?.trackId).toBe(7);
+  });
+  it('coming toward you fast is still a blockage', () => {
+    const o = new CuePolicy().update([ahead(1.8, 2)], 0, cfg, { walking: true });
+    expect(o.blocked).toBe(true);
+    expect(o.pacing).toBeNull();
+  });
+  it('too close, or you are standing still: blockage as before', () => {
+    expect(new CuePolicy().update([ahead(0.9, 0.3)], 0, cfg, { walking: true }).blocked).toBe(true);
+    expect(new CuePolicy().update([ahead(1.8, 0.3)], 0, cfg, { walking: false }).blocked).toBe(true);
+  });
+  it('just seen (no size history yet): never assumed to be walking your way', () => {
+    expect(new CuePolicy().update([ahead(1.8, 0.3, 200)], 0, cfg, { walking: true }).blocked).toBe(true);
+  });
+});
