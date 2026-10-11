@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchIntent, parseIntent } from './intents';
+import { matchIntent, matchLabel, parseIntent } from './intents';
 
 describe('voice command understanding', () => {
   it('main choices, in natural phrasing', () => {
@@ -60,5 +60,30 @@ describe('accurate speech matching (all alternatives, small grammar, mishearings
     expect(matchIntent(['scan again'], [...CMDS])?.intent).toBe('scan');
     expect(matchIntent(['how far have I gone'], [...CMDS])?.intent).toBe('stats');
     expect(matchIntent(['paws'], [...CMDS])).toMatchObject({ intent: 'pause', exact: false });
+  });
+});
+
+describe('choosing an option by saying its name', () => {
+  const home = ['Live view', 'Simulation', 'Sound check', 'Settings'];
+  const sims = ['Walk: park path with obstacles and people', 'Run: 400 metre track', 'Run: road with a yellow guide line', 'Back'];
+  const live = ['Scan around me, then walk', 'Walk or run along a painted line', 'Run in a track lane', 'Back'];
+  it('every home option, by name', () => {
+    expect(matchLabel(['live view'], home)).toBe(0);
+    expect(matchLabel(['simulation please'], home)).toBe(1);
+    expect(matchLabel(['sound check'], home)).toBe(2);
+    expect(matchLabel(['open settings'], home)).toBe(3);
+  });
+  it('simulations and live views, by part of the name', () => {
+    expect(matchLabel(['the park path'], sims)).toBe(0);
+    expect(matchLabel(['400 metre track'], sims)).toBe(1);
+    expect(matchLabel(['road'], sims)).toBe(2);
+    expect(matchLabel(['back'], sims)).toBe(3);
+    expect(matchLabel(['painted line'], live)).toBe(1);
+    expect(matchLabel(['track lane'], live)).toBe(2);
+    expect(matchLabel(['scan around me'], live)).toBe(0);
+  });
+  it('a tie or nothing in common is not a match (asks again)', () => {
+    expect(matchLabel(['run'], sims)).toBeNull(); // two "Run" options
+    expect(matchLabel(['banana'], home)).toBeNull();
   });
 });

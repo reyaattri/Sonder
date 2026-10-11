@@ -172,6 +172,32 @@ export function matchIntent(alternatives: string[], allowed: Intent[]): Match | 
   return null;
 }
 
+const STOP_WORDS = new Set(['the', 'a', 'an', 'on', 'in', 'with', 'and', 'or', 'to', 'me', 'my', 'please', 'i', 'want', 'go', 'then', 'of', 'for', 'it', 'is', 'let', 'lets', "let's", 'can', 'you', 'do', 'option', 'choose', 'select', 'pick']);
+const contentWords = (t: string) =>
+  normalise(t)
+    .trim()
+    .split(' ')
+    .map((w) => SOUNDS_LIKE[w] ?? w)
+    .filter((w) => w && !STOP_WORDS.has(w));
+
+/**
+ * Pick an option by (part of) its NAME: "sound check", "park path", "track
+ * lane". The option sharing the most words with what was said wins; a tie,
+ * or nothing in common, is not a match (the menu asks again).
+ */
+export function matchLabel(alternatives: string[], labels: string[]): number | null {
+  for (const alt of alternatives) {
+    const said = new Set(contentWords(alt));
+    if (!said.size) continue;
+    const scores = labels.map((l) => contentWords(l).filter((w) => said.has(w)).length);
+    const best = Math.max(...scores);
+    if (best < 1) continue;
+    const winners = scores.filter((v) => v === best).length;
+    if (winners === 1) return scores.indexOf(best);
+  }
+  return null;
+}
+
 export function normalise(text: string): string {
   return ` ${text.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim()} `;
 }

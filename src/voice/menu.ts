@@ -1,7 +1,7 @@
 import type { AudioEngine } from '../audio/engine';
 import type { Settings } from '../core/settings';
 import type { Announcer } from '../speech/announcer';
-import { matchIntent, type Intent } from './intents';
+import { matchIntent, matchLabel, type Intent } from './intents';
 import type { Heard, Listener } from './listener';
 
 /**
@@ -27,6 +27,8 @@ export interface MenuStep {
   title: string;
   prompt: string;
   options: MenuOption[];
+  /** Read the options out after the prompt (default true). */
+  listOptions?: boolean;
 }
 
 export interface MenuDeps {
@@ -44,6 +46,14 @@ export interface MenuDeps {
 }
 
 const GLOBAL: Intent[] = ['back', 'help'];
+
+/** " Options: Live view, Simulation, Sound check, or Settings." */
+function optionsSentence(st: MenuStep): string {
+  if (st.listOptions === false || st.id === 'disclaimer') return '';
+  const names = st.options.map((o) => o.label.replace(/:/g, ','));
+  if (names.length === 1) return ` Say ${names[0]}.`;
+  return ` Options: ${names.slice(0, -1).join(', ')}, or ${names[names.length - 1]}.`;
+}
 
 export class VoiceMenu {
   private stack: string[] = [];
@@ -69,7 +79,7 @@ export class VoiceMenu {
       activity: {
         id: 'activity',
         title: 'Live view or simulation?',
-        prompt: 'Live view, or simulation? Live view uses your camera in the real world. Simulation needs no camera.',
+        prompt: 'Live view or simulation? Live view uses your camera in the real world. Simulation needs no camera.',
         options: [
           { label: 'Live view', intents: ['live', 'walk', 'run', 'scan'], run: go('live') },
           { label: 'Simulation', intents: ['simulator'], run: go('practice') },
@@ -80,7 +90,7 @@ export class VoiceMenu {
       live: {
         id: 'live',
         title: 'Which live view?',
-        prompt: 'Which live view? Scan around you, then walk. Walk or run along a painted line. Or run in a track lane.',
+        prompt: 'Which live view?',
         options: [
           { label: 'Scan around me, then walk', intents: ['walk', 'scan'], run: () => this.start('live-walk') },
           { label: 'Walk or run along a painted line', intents: ['line'], run: () => this.start('live-line') },
@@ -111,7 +121,7 @@ export class VoiceMenu {
       practice: {
         id: 'practice',
         title: 'Which simulation?',
-        prompt: 'Which simulation? Walk on a park path, run on a 400 metre track, or run on a road with a guide line.',
+        prompt: 'Which simulation?',
         options: [
           { label: 'Walk: park path with obstacles and people', intents: ['walk'], run: () => this.start('walk') },
           { label: 'Run: 400 metre track', intents: ['run', 'lanes'], run: () => this.start('stadium') },
@@ -122,7 +132,7 @@ export class VoiceMenu {
       settings: {
         id: 'settings',
         title: 'Settings',
-        prompt: 'Settings. Say louder, quieter, calmer, more detail, surround on or off, cane on or off, echo on or off, or done.',
+        prompt: 'Settings.',
         options: [
           { label: 'Louder', intents: ['louder'], run: set({ volume: Math.min(1, s.volume + 0.15) }, 'Louder.') },
           { label: 'Quieter', intents: ['quieter'], run: set({ volume: Math.max(0.1, s.volume - 0.15) }, 'Quieter.') },
@@ -208,7 +218,7 @@ export class VoiceMenu {
     const taps = this.d.listener.supported
       ? ''
       : ' Tap once for ' + st.options[0].label + '. Press and hold for other options.';
-    this.d.announcer.say(this.intro + st.prompt + taps, { interrupt: true, system: false, priority: 0 });
+    this.d.announcer.say(this.intro + st.prompt + optionsSentence(st) + taps, { interrupt: true, system: false, priority: 0 });
     this.intro = '';
     void this.listen();
   }
@@ -243,6 +253,15 @@ export class VoiceMenu {
     const m = matchIntent(heard.alternatives, allowed);
     const shown = heard.alternatives[0]?.trim() ?? '';
     if (!m) {
+      // Not a keyword: maybe the option's own name ("sound check", "park path").
+      const byName = matchLabel(heard.alternatives, st.options.map((o) => o.label));
+      if (byName !== null) {
+        this.misses = 0;
+        const opt = st.options[byName];
+        this.d.render(st, byName, `Heard: "${shown}"`);
+        void opt.run();
+        return;
+      }
       this.misses++;
       this.d.render(st, this.hi, `Heard: "${shown}"`);
       this.d.audio.earcon('attention');
@@ -272,6 +291,7 @@ export class VoiceMenu {
       id: 'confirm',
       title: `Did you mean ${opt.label}?`,
       prompt: `Did you mean ${opt.label}? Say yes or no.`,
+      listOptions: false,
       options: [
         { label: `Yes, ${opt.label}`, intents: ['yes'], run: () => ((this.step = back), void opt.run()) },
         { label: 'No', intents: ['no', 'back'], run: () => ((this.step = back), this.speakStep()) },
@@ -330,6 +350,7 @@ export class VoiceMenu {
       id: 'heard',
       title: 'Did you hear it go around you?',
       prompt: 'Did you hear it go all the way around you? Say yes or no.',
+      listOptions: false,
       options: [
         {
           label: 'Yes',

@@ -437,7 +437,7 @@ function cameraHelp(e: CameraError): string {
 }
 
 $('btn-retry').addEventListener('click', () => void (settings.activity === 'track' ? startTrack() : startRunning()));
-$('btn-status-back').addEventListener('click', () => show('welcome'));
+$('btn-status-back').addEventListener('click', () => returnHome());
 
 // ---------------------------------------------------------------------------
 // Sound check: where sound is going, stereo or mono, direction test, palette
@@ -1940,12 +1940,20 @@ document.addEventListener('keydown', (e) => {
     void voiceCommand();
 });
 
+/**
+ * After stopping (or a failed start): straight back to the first voice-menu
+ * question, on screen at once and spoken as soon as the run summary has been said.
+ */
 function returnHome(): void {
-  if (settings.voiceMenu) {
-    show('voice');
-    setTimeout(() => voiceMenu.begin(), 2500);
-  } else show('welcome');
+  if (!settings.voiceMenu) update({ voiceMenu: true });
+  show('voice');
+  voiceMenu.preview();
+  const token = ++homeToken;
+  void announcer.whenIdle(12000).then(() => {
+    if (token === homeToken && current === 'voice' && !voiceMenu.active) voiceMenu.begin();
+  });
 }
+let homeToken = 0;
 
 // Initial state (after every const above is initialised).
 applySettings(settings);
