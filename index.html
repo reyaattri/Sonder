@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="EchoPath turns your phone camera into a pair of ears: obstacles and people become directional sounds, processed entirely on your device." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <link rel="apple-touch-icon" href="icons/icon-180.png" />
+    <link rel="icon" type="image/png" href="icons/icon-192.png" />
+    <title>EchoPath</title>
+    <script type="module" crossorigin src="./assets/index-DISqmSeF.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BzwDsZEZ.css">
+  <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
+  <body>
+    <!-- Screen-reader announcements -->
+    <div id="sr-polite" class="sr-only" role="status" aria-live="polite"></div>
+    <div id="sr-assertive" class="sr-only" role="alert" aria-live="assertive"></div>
+
+    <!-- Voice menu (eyes-free start screen) -->
+    <main id="screen-voice" class="screen voice">
+      <div class="voice-top">
+        <button type="button" id="btn-theme" class="linkish theme-toggle">☀️ Light mode</button>
+        <button type="button" id="btn-visual-menu" class="linkish">Visual menu</button>
+      </div>
+      <h1 tabindex="-1" id="voice-title">EchoPath</h1>
+      <p id="voice-prompt" class="lead">Tap anywhere to start. EchoPath will talk you through it.</p>
+      <ol id="voice-options" class="voice-options" aria-hidden="true"></ol>
+      <p id="voice-heard" class="hint"></p>
+      <button type="button" id="voice-target" class="voice-target">
+        <span id="voice-target-label">Tap anywhere to start</span>
+        <span class="voice-gestures">Tap: choose · Hold: next option · Double-tap: back</span>
+      </button>
+    </main>
+
+    <!-- Home -->
+    <main id="screen-welcome" class="screen home" data-active>
+      <div class="voice-top">
+        <button type="button" id="btn-theme-home" class="linkish theme-toggle">☀️ Light mode</button>
+      </div>
+      <header class="brand">
+        <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+          <circle cx="32" cy="32" r="6" fill="currentColor" />
+          <path d="M20 20a17 17 0 0 0 0 24M13 13a27 27 0 0 0 0 38M44 20a17 17 0 0 1 0 24M51 13a27 27 0 0 1 0 38"
+            fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" />
+        </svg>
+        <div>
+          <h1 tabindex="-1">EchoPath</h1>
+          <p class="tagline">Hear what is ahead. People and obstacles become sounds from their direction.</p>
+        </div>
+      </header>
+
+      <button type="button" id="sound-on" class="sound-on">🔊 Tap anywhere to turn on sound and hear how EchoPath works</button>
+      <!-- One question at a time, like the voice menu: live view or simulation, then which one. -->
+      <section class="home-flow" aria-labelledby="home-q">
+        <h2 id="home-q" tabindex="-1">Live view or simulation?</h2>
+        <p class="hint" id="home-hint">Live view uses your camera in the real world. Simulation needs no camera.</p>
+        <div class="home-choices" id="home-choices"></div>
+      </section>
+      <div class="row2 home-tools">
+        <button id="btn-how" type="button">How it works</button>
+        <button id="btn-sound" type="button">Sound check</button>
+      </div>
+      <button id="btn-settings-welcome" type="button">Settings</button>
+      <button id="btn-voice-menu" type="button">Voice menu (eyes-free)</button>
+      <p class="note">Everything runs on this phone. Nothing is recorded or uploaded.</p>
+      <p class="note">EchoPath is a supplementary aid. Keep using your cane, guide dog or sighted help.</p>
+    </main>
+
+    <!-- First-run safety notice -->
+    <main id="screen-disclaimer" class="screen">
+      <h1 tabindex="-1">Before you start</h1>
+      <div id="disclaimer-text" class="card prose">
+        <p>EchoPath is a supplementary aid. It is not a replacement for a cane, a guide dog or sighted assistance.</p>
+        <p>It can miss obstacles, especially glass, stairs, drop-offs and anything in low light.</p>
+        <p>Silence means nothing was detected. It never means the way is safe.</p>
+        <p>Video is processed only on this phone. Nothing is recorded or sent anywhere.</p>
+      </div>
+      <button id="btn-accept" class="big primary" type="button">I understand, continue</button>
+      <button id="btn-reread" type="button">Read it aloud again</button>
+    </main>
+
+    <!-- Sound check -->
+    <main id="screen-sound" class="screen">
+      <h1 tabindex="-1">Sound check</h1>
+      <section class="card" aria-labelledby="out-title">
+        <h2 id="out-title">Headphones</h2>
+        <ul class="checks">
+          <li data-check="out-device"><span class="dot"></span><span class="what">Playing to</span><span class="val" id="out-device">Unknown</span></li>
+          <li data-check="out-stereo"><span class="dot"></span><span class="what">Stereo</span><span class="val" id="out-stereo">Unknown</span></li>
+          <li data-check="out-delay"><span class="dot"></span><span class="what">Sound delay</span><span class="val" id="out-delay">Unknown</span></li>
+        </ul>
+        <div id="out-problem" class="problem" hidden></div>
+        <details class="bt-help">
+          <summary>Bluetooth headphones on a Windows laptop: fix steps</summary>
+          <ol>
+            <li>Turn the headphones on. If they're connected to your phone, disconnect them there (or use their multipoint mode).</li>
+            <li>Windows Settings, Bluetooth and devices: select your headphones, then Connect. Wait until it says "Connected music".</li>
+            <li>Sound settings, Output: choose the entry called <em>Headphones (your headphones)</em>, not <em>Headset (… Hands-Free)</em>. Hands-free is mono, so left and right can't work.</li>
+            <li>If Windows keeps switching to Hands-Free: Control Panel, Devices and Printers, right-click the headphones, Properties, Services, and untick <em>Hands-free Telephony</em>.</li>
+            <li>Come back here and press <em>Reconnect sound</em>, then <em>Circle me</em>.</li>
+          </ol>
+        </details>
+        <button id="btn-reconnect" type="button">Headphones just connected? Reconnect sound</button>
+      </section>
+
+      <section class="card" aria-labelledby="dir-title">
+        <h2 id="dir-title">Direction test</h2>
+        <div class="row3">
+          <button type="button" data-tone="left">Left</button>
+          <button type="button" data-tone="sweep">Circle me</button>
+          <button type="button" data-tone="right">Right</button>
+        </div>
+        <button id="btn-hp-guided" type="button">Guided headphone check</button>
+      </section>
+
+      <section class="card" aria-labelledby="pal-title">
+        <h2 id="pal-title">Learn the sounds</h2>
+        <div class="palette">
+          <button type="button" data-preview="person"><span class="sw sw-person"></span>Person</button>
+          <button type="button" data-preview="vehicle"><span class="sw sw-vehicle"></span>Vehicle or bike</button>
+          <button type="button" data-preview="static"><span class="sw sw-static"></span>Obstacle</button>
+          <button type="button" data-preview="blocked"><span class="sw sw-danger"></span>Path blocked</button>
+          <button type="button" data-preview="guide"><span class="sw sw-guide"></span>Go this way</button>
+          <button type="button" data-preview="tick"><span class="sw sw-muted"></span>Still working</button>
+        </div>
+      </section>
+      <button id="btn-sound-back" class="big primary" type="button">Done</button>
+    </main>
+
+    <!-- Guided headphone check -->
+    <main id="screen-headphones" class="screen">
+      <h1 tabindex="-1">Headphone check</h1>
+      <p id="hp-instructions" class="lead">Put on your headphones. You will hear a tone in one ear, then in the other.</p>
+      <div id="hp-question" hidden>
+        <p id="hp-prompt" class="lead">Where did you hear the tone?</p>
+        <div class="choices">
+          <button class="big" type="button" data-heard="left">Left ear</button>
+          <button class="big" type="button" data-heard="right">Right ear</button>
+          <button class="big" type="button" data-heard="both">Both ears equally</button>
+        </div>
+        <button id="hp-replay" type="button">Play the tone again</button>
+      </div>
+      <button id="hp-begin" class="big primary" type="button">Play the first tone</button>
+      <button id="hp-skip" type="button">Skip for now</button>
+    </main>
+
+    <!-- Starting / errors -->
+    <main id="screen-status" class="screen">
+      <h1 tabindex="-1" id="status-title">Starting</h1>
+      <div class="spinner" id="status-spinner" aria-hidden="true"></div>
+      <p id="status-text" class="lead"></p>
+      <button id="btn-retry" class="big primary" type="button" hidden>Try again</button>
+      <button id="btn-status-back" type="button">Back</button>
+    </main>
+
+    <!-- Running -->
+    <main id="screen-running" class="screen running">
+      <ul class="chips" aria-label="Status">
+        <li class="chip" id="chip-state"><span class="dot"></span><span class="txt">Running</span></li>
+        <li class="chip" id="chip-audio"><span class="dot"></span><span class="txt">Sound</span></li>
+        <li class="chip" id="chip-motion"><span class="dot"></span><span class="txt">Standing</span></li>
+        <li class="chip" id="chip-perf"><span class="dot"></span><span class="txt">Starting</span></li>
+        <li class="chip" id="chip-battery" hidden><span class="dot"></span><span class="txt"></span></li>
+      </ul>
+      <section class="sim" id="wsim-panel" hidden aria-label="Walk simulator">
+        <div class="sim-view" id="wsim-view" aria-hidden="true">
+          <canvas id="wsim-overlay"></canvas>
+        </div>
+        <div class="sim-controls">
+          <button type="button" id="wsim-left" aria-label="Step left (hold)">◀ Left</button>
+          <button type="button" id="wsim-auto" aria-pressed="true">Autopilot: on</button>
+          <button type="button" id="wsim-right" aria-label="Step right (hold)">Right ▶</button>
+        </div>
+        <select id="wsim-scene" aria-label="Simulated scene">
+          <option value="walk">Walk: park path with obstacles and people</option>
+          <option value="stadium">Run: 400 m track, lane 3</option>
+          <option value="road">Run: road with yellow guide line</option>
+        </select>
+        <p class="sim-truth" id="wsim-truth" aria-live="off"></p>
+      </section>
+      <div class="stage">
+        <canvas id="radar" aria-hidden="true"></canvas>
+        <div class="pip" id="pip" hidden>
+          <video id="video" playsinline muted aria-hidden="true"></video>
+          <canvas id="overlay" aria-hidden="true"></canvas>
+        </div>
+        <button id="pause-target" type="button">
+          <span class="sr-only" id="pause-label">EchoPath is running. Activate to pause.</span>
+        </button>
+        <p class="banner" id="banner" aria-hidden="true" hidden></p>
+      </div>
+      <p class="gesture" id="gesture-hint"></p>
+      <p class="voice-caption" id="cmd-caption" aria-live="polite" hidden></p>
+      <div class="controls" id="controls">
+        <button id="btn-pause" class="big primary" type="button">Pause</button>
+        <button id="btn-describe" class="big" type="button">What's around me?</button>
+        <button id="btn-scan" class="big" type="button">Scan around me</button>
+        <button id="btn-voice-cmd" class="big" type="button">Speak a command</button>
+        <div class="row2">
+          <button id="btn-settings-run" type="button">Settings</button>
+          <button id="btn-stop" type="button">Stop</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Track run -->
+    <main id="screen-track" class="screen running track">
+      <ul class="chips" aria-label="Status">
+        <li class="chip" id="tchip-state"><span class="dot"></span><span class="txt">Running</span></li>
+        <li class="chip" id="tchip-lane"><span class="dot"></span><span class="txt">Finding lane</span></li>
+        <li class="chip" id="tchip-gps"><span class="dot"></span><span class="txt">GPS</span></li>
+        <li class="chip" id="tchip-perf"><span class="dot"></span><span class="txt">Starting</span></li>
+      </ul>
+      <section class="sim" id="sim-panel" hidden aria-label="Simulator">
+        <div class="sim-view" id="sim-view" aria-hidden="true">
+          <canvas id="sim-overlay"></canvas>
+        </div>
+        <div class="sim-controls">
+          <button type="button" id="sim-left" aria-label="Steer left (hold)">◀ Left</button>
+          <button type="button" id="sim-auto" aria-pressed="true">Autopilot: on</button>
+          <button type="button" id="sim-right" aria-label="Steer right (hold)">Right ▶</button>
+        </div>
+        <div class="sim-controls">
+          <select id="sim-course" aria-label="Simulated course">
+            <option value="stadium">400 m track, lane 3</option>
+            <option value="road">Road with yellow guide line</option>
+            <option value="walk">Walk: park path with obstacles and people</option>
+          </select>
+          <button type="button" id="sim-slower" aria-label="Slower">−</button>
+          <button type="button" id="sim-faster" aria-label="Faster">+</button>
+        </div>
+        <button type="button" id="sim-demo" class="sim-demo" aria-pressed="false">Demo all cases once: drift, big drift, runner ahead, someone on the line, worn paint</button>
+        <p class="sim-truth" id="sim-truth" aria-live="off"></p>
+      </section>
+      <div class="stage">
+        <canvas id="lane-gauge" aria-hidden="true"></canvas>
+        <div class="pip" id="tpip" hidden>
+          <video id="tvideo" playsinline muted aria-hidden="true"></video>
+          <canvas id="toverlay" aria-hidden="true"></canvas>
+        </div>
+        <button id="track-target" type="button">
+          <span class="sr-only" id="track-label">Track guidance running. Activate to pause.</span>
+        </button>
+      </div>
+      <dl class="metrics" id="metrics" aria-label="Run stats">
+        <div><dt>Time</dt><dd id="m-time">0:00</dd></div>
+        <div><dt>Distance</dt><dd id="m-dist">0 m</dd></div>
+        <div><dt>Pace /km</dt><dd id="m-pace">–</dd></div>
+        <div><dt>Cadence</dt><dd id="m-cad">–</dd></div>
+        <div><dt>Laps</dt><dd id="m-laps">0</dd></div>
+      </dl>
+      <p class="gesture" id="track-hint">Press and hold anywhere to pause. Double-tap to hear your stats.</p>
+      <p class="voice-caption" id="tcmd-caption" aria-live="polite" hidden></p>
+      <div class="controls" id="track-controls">
+        <button id="btn-tpause" class="big primary" type="button">Pause</button>
+        <button id="btn-tstats" class="big" type="button">Say my stats</button>
+        <button id="btn-tvoice-cmd" type="button">Speak a command</button>
+        <div class="row2">
+          <button id="btn-tsettings" type="button">Settings</button>
+          <button id="btn-tstop" type="button">Stop</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Settings -->
+    <dialog id="settings" aria-labelledby="settings-title">
+      <form method="dialog" id="settings-form">
+        <h2 id="settings-title" tabindex="-1">Settings</h2>
+
+        <fieldset>
+          <legend>Wearing</legend>
+          <label>Where is the phone?
+            <select name="mount">
+              <option value="chest">Chest (lanyard or strap)</option>
+              <option value="waist">Waist (belt clip)</option>
+              <option value="hand">In hand</option>
+              <option value="table">On a table (demo)</option>
+            </select>
+          </label>
+          <label class="row"><input type="checkbox" name="heartbeat" /> Soft tick every few seconds so I know it is working</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Walking cues</legend>
+          <label>How often cues sound
+            <select name="cueDensity">
+              <option value="calm">Calm: only nearby things, no repeats for a few seconds</option>
+              <option value="normal">Normal</option>
+              <option value="detailed">Detailed: everything in view, frequent updates</option>
+            </select>
+          </label>
+          <div class="calib">
+            <p class="hint">Distance calibration: while running, have one person stand straight ahead at a measured distance, then press Calibrate.</p>
+            <div class="row2">
+              <label><span>Their distance (m)</span>
+                <input type="number" id="calib-m" min="1" max="8" step="0.5" value="3" />
+              </label>
+              <button type="button" id="btn-calibrate">Calibrate</button>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Track run</legend>
+          <label>Course
+            <select name="trackCourse">
+              <option value="lanes">Running track: stay between my two lane lines</option>
+              <option value="line">Guide line: run along one painted line (road racing line, guide line)</option>
+              <option value="edge">Kerb or edge: keep a line on one side of me (road race)</option>
+            </select>
+          </label>
+          <div class="row2">
+            <label>Line colour
+              <select name="lineColor">
+                <option value="white">White</option>
+                <option value="yellow">Yellow</option>
+                <option value="blue">Blue</option>
+                <option value="any">Any bright line</option>
+              </select>
+            </label>
+            <label>Edge line side
+              <select name="edgeSide">
+                <option value="left">On my left</option>
+                <option value="right">On my right</option>
+              </select>
+            </label>
+          </div>
+          <label>Drift feedback style
+            <select name="trackStyle">
+              <option value="pg">Guide-line sounds (recommended): steering, warning, turn and stop sounds, with a buzz in the ear of the side to turn</option>
+              <option value="glide">Smooth glide: a soft tone that rises from low to high as you need to correct, from the side to steer toward</option>
+              <option value="rumble">Rumble strip: clicks from the line I'm drifting onto</option>
+              <option value="guideline">Guideline style: beeps on the side to steer toward, high warning at the edge</option>
+              <option value="tone">Continuous tone: steady when on line, moves and turns dissonant as I drift</option>
+            </select>
+          </label>
+          <label><span>Free zone before cues: <output name="deadbandOut"></output>% of the lane</span>
+            <input type="range" aria-label="Free zone before cues" name="trackDeadband" min="5" max="30" step="1" />
+          </label>
+          <label class="row"><input type="checkbox" name="trackHaptics" /> Phone vibration (Android): STOP, step left (1 buzz) or right (2), drifting</label>
+          <label>Speak my stats
+            <select name="trackAnnounce">
+              <option value="lap">Every lap</option>
+              <option value="km">Every kilometre</option>
+              <option value="time">Every few minutes</option>
+              <option value="off">Only when I ask</option>
+            </select>
+          </label>
+          <div class="row2">
+            <label><span>Minutes between stats</span><input type="number" name="trackAnnounceMinutes" min="1" max="30" step="1" /></label>
+            <label><span>Lap length (m)</span><input type="number" name="lapMeters" min="100" max="1000" step="50" /></label>
+          </div>
+          <div class="row2">
+            <label><span>Step length (m), used without GPS</span><input type="number" name="runStepLength" min="0.4" max="2.2" step="0.05" /></label>
+          </div>
+          <div class="row2">
+            <label><span>Camera height (m): chest 1.3, waist 1.0</span><input type="number" name="mountHeight" min="0.6" max="1.8" step="0.05" /></label>
+            <label><span>Distance from kerb, edge course (m)</span><input type="number" name="edgeGap" min="0.2" max="2" step="0.1" /></label>
+          </div>
+          <label><span>Ear vibration in the headphones <span class="hint">(a low rumble in the ear of the side to go; STOP in both)</span></span>
+            <input type="range" aria-label="Ear vibration" name="earVibration" min="0" max="100" step="5" />
+          </label>
+          <label class="row"><input type="checkbox" name="runBeacon" /> 360 guide beacon: a soft sound at the point ahead to run toward</label>
+          <label class="row"><input type="checkbox" name="trackObstacles" /> Warn about runners directly ahead (and which side to pass on roads)</label>
+          <div class="row2">
+            <label><span>Target pace per km (mm:ss, blank = off)</span><input type="text" inputmode="numeric" name="targetPace" placeholder="5:30" /></label>
+            <label><span>Cadence metronome (steps/min, 0 = off)</span><input type="number" name="metronomeSpm" min="0" max="220" step="2" /></label>
+          </div>
+          <label class="row"><input type="checkbox" name="trackCountdown" /> 3, 2, 1, go before starting</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Camera and headphones</legend>
+          <label>Camera
+            <select name="cameraId" id="camera-select">
+              <option value="">Automatic (rear camera on phones)</option>
+            </select>
+          </label>
+          <label>Camera direction
+            <select name="cameraFacing">
+              <option value="auto">Automatic</option>
+              <option value="same">Points the way I face (phone on chest or lanyard)</option>
+              <option value="toward">Points toward me (laptop webcam)</option>
+            </select>
+          </label>
+          <label class="row"><input type="checkbox" name="wideAngle" /> Use the ultra-wide lens when the phone has one (sees more)</label>
+          <label>Sound output
+            <select name="audioOutputId" id="output-select">
+              <option value="">System default</option>
+            </select>
+          </label>
+          <p class="hint" id="output-hint">
+            Pair your Bluetooth headphones in your phone or computer's Bluetooth settings first. Bluetooth adds some
+            delay to cues; wired or low-latency earbuds react fastest.
+          </p>
+          <label>Audio buffer
+            <select name="latencyMode">
+              <option value="auto">Automatic (larger for Bluetooth, to stop crackling)</option>
+              <option value="interactive">Fastest (wired headphones)</option>
+              <option value="balanced">Balanced (most Bluetooth)</option>
+              <option value="playback">Smoothest (Bluetooth that keeps crackling)</option>
+            </select>
+          </label>
+          <label class="row"><input type="checkbox" name="btKeepAlive" /> Keep Bluetooth headphones awake (stops the first cue being cut off)</label>
+          <button type="button" id="btn-spatial-test" class="secondary">Test spatial sound (full circle)</button>
+        </fieldset>
+
+        <fieldset>
+          <legend>Sound</legend>
+          <label class="row"><input type="radio" name="mode" value="spatial" /> Spatial (3D, follows the object)</label>
+          <label class="row"><input type="radio" name="mode" value="stereo" /> Simple left / center / right</label>
+          <label><span>Volume <span class="hint">(capped at a safe maximum)</span></span>
+            <input type="range" aria-label="Volume" name="volume" min="0" max="100" step="5" />
+          </label>
+          <label><span>Direction width: <output name="spreadOut"></output>x <span class="hint">(wider makes left and right clearer)</span></span>
+            <input type="range" aria-label="Direction width" name="spatialSpread" min="1" max="3" step="0.1" />
+          </label>
+          <label>Sound scene
+            <select name="soundScene">
+              <option value="surround">Surround (8D): hear everything around me, continuously</option>
+              <option value="cues">Cues only: just the alerts</option>
+            </select>
+          </label>
+          <label><span>Surround loudness <span class="hint">(under the alerts)</span></span>
+            <input type="range" aria-label="Surround loudness" name="sceneLevel" min="0" max="100" step="5" />
+          </label>
+          <label class="row"><input type="checkbox" name="depthCane" /> Virtual white cane: depth AI finds any obstacle in my path, even at head height (no LiDAR needed)</label>
+          <label>Echolocation clicks
+            <select name="echoEverySec">
+              <option value="0">Off</option>
+              <option value="1.5">Every 1.5 seconds</option>
+              <option value="3">Every 3 seconds</option>
+            </select>
+          </label>
+          <label>Cue sound style
+            <select name="soundStyle">
+              <option value="classic">Classic (distinct)</option>
+              <option value="soft">Soft (gentler)</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Detection</legend>
+          <label>Sensitivity
+            <select name="sensitivity">
+              <option value="low">Low: only near, confident objects</option>
+              <option value="medium">Medium</option>
+              <option value="high">High: more and farther objects</option>
+            </select>
+          </label>
+          <label><span>Blocked-path distance: <output name="blockDistanceOut"></output> m</span>
+            <input type="range" aria-label="Blocked-path distance" name="blockDistance" min="1" max="4" step="0.25" />
+          </label>
+          <label><span>Walking corridor width: <output name="corridorOut"></output>%</span>
+            <input type="range" aria-label="Walking corridor width" name="corridorWidth" min="50" max="100" step="5" />
+          </label>
+          <label><span>Camera field of view: <output name="fovOut"></output>°</span>
+            <input type="range" aria-label="Camera field of view" name="fovDeg" min="45" max="100" step="1" />
+          </label>
+          <label>Model
+            <select name="model">
+              <option value="efficientdet_lite0">Fast (EfficientDet-Lite0)</option>
+              <option value="efficientdet_lite2">Accurate (EfficientDet-Lite2)</option>
+              <option value="yolox_nano">YOLOX-nano (ONNX Runtime)</option>
+            </select>
+          </label>
+          <label class="row"><input type="checkbox" name="looming" /> Looming detector: warn about anything rushing toward me, even things it can't name (locust-inspired)</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Voice</legend>
+          <label>Spoken warnings
+            <select name="verbosity">
+              <option value="off">Off</option>
+              <option value="urgent">Urgent only</option>
+              <option value="all">All approaching objects</option>
+            </select>
+          </label>
+          <label class="row"><input type="checkbox" name="voiceGuidance" /> Spoken guidance (turn off if your screen reader already reads status)</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Display</legend>
+          <label>Appearance
+            <select name="theme">
+              <option value="auto">Match my device</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Tools</legend>
+          <button type="button" id="btn-hp-check" class="secondary">Run headphone check</button>
+          <button type="button" id="btn-disclaimer" class="secondary">Read the safety notice</button>
+          <button type="button" id="btn-offline" class="secondary">Save all models for offline use</button>
+          <button type="button" id="btn-log" class="secondary">Download session log</button>
+          <label class="row"><input type="checkbox" name="debugOverlay" /> Show camera view with detection boxes (for sighted helpers)</label>
+          <p id="stats" class="stats" aria-live="off"></p>
+          <button type="button" id="btn-reset" class="secondary">Reset all settings</button>
+        </fieldset>
+
+        <button class="big primary" value="close">Done</button>
+      </form>
+    </dialog>
+
+  </body>
+</html>
