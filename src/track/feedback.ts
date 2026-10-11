@@ -50,11 +50,14 @@ export class LaneFeedback {
   private lastHaptic = -Infinity;
   private lastLevel: DriftLevel = 'centred';
   private wasDrifting = false;
+  private driftStart = 0;
+  private lastRecovered = -Infinity;
 
   reset(): void {
     this.lastPing = this.lastHaptic = -Infinity;
     this.lastLevel = 'centred';
     this.wasDrifting = false;
+    this.lastRecovered = -Infinity;
   }
 
   update(predictedOffset: number, lost: boolean, now: number, cfg: FeedbackConfig): FeedbackEvent {
@@ -65,11 +68,15 @@ export class LaneFeedback {
     }
     const level = driftLevel(Math.abs(predictedOffset), cfg.deadband);
     if (level === 'centred') {
-      const recovered = this.wasDrifting && this.lastLevel !== 'centred';
+      // Only confirm a real correction (a drift that lasted), not every wobble.
+      const recovered =
+        this.wasDrifting && this.lastLevel !== 'centred' && now - this.driftStart > 800 && now - this.lastRecovered > 4000;
+      if (recovered) this.lastRecovered = now;
       this.wasDrifting = false;
       this.lastLevel = level;
       return { ...none, recovered };
     }
+    if (!this.wasDrifting) this.driftStart = now;
     this.wasDrifting = true;
     const lineSide: -1 | 1 = predictedOffset > 0 ? 1 : -1;
     const side: -1 | 1 = cfg.cueSide === 'line' ? lineSide : (-lineSide as -1 | 1);

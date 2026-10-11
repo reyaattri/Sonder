@@ -3,8 +3,30 @@ import { CATEGORY_PRIORITY } from '../perception/classes';
 import { bandOf, bandRank, closeness, pulseRateHz } from '../perception/geometry';
 import { centerOverlap } from '../perception/zones';
 import type { Track } from '../perception/tracker';
+import { chooseGuide, type PathModel } from '../perception/freespace';
+import type { LgmdOutput } from '../perception/lgmd';
 
-export type CueKind = 'person' | 'vehicle' | 'static' | 'blocked' | 'guide';
+/** 'looming' = something unrecognised rushing at you from one side (LGMD pathway). */
+export type CueKind = 'person' | 'vehicle' | 'static' | 'blocked' | 'guide' | 'looming';
+
+/** Extra perception the policy can use when available. */
+export interface PolicyEnv {
+  /** Legacy: center looming flag (forces the blocked path). */
+  loomingCenter?: boolean;
+  /** Walkable-path model: the guide tone only points where the path continues. */
+  path?: PathModel | null;
+  /** Locust-inspired looming pathway (class-agnostic, per sector). */
+  lgmd?: LgmdOutput | null;
+  /**
+   * Where the depth AI measured the unrecognised thing in your path
+   * (metres: x + right, z forward). Lets the side choice step AWAY from a
+   * pole or bench the object detector has no name for.
+   */
+  depthObstacle?: { x: number; z: number } | null;
+}
+
+/** Lateral clearance needed to pass someone: about body width plus a margin (metres). */
+const PASS_CLEARANCE_M = 0.6;
 
 /** One sound source the audio engine should be playing right now. */
 export interface CueSource {
@@ -16,6 +38,8 @@ export interface CueSource {
   zone: Zone;
   /** Radians, negative = left. */
   azimuth: number;
+  /** Radians above (+) / below (-) eye level, when known. */
+  elevation?: number;
   distance: number;
   band: DistanceBand;
   /** Pulses per second. */
@@ -36,6 +60,8 @@ export interface PolicyConfig {
   maxSources: number;
   /** How talkative cues are (default 'detailed' = every qualifying event). */
   density?: CueDensity;
+  /** Focal length as a fraction of frame width (converts metres to image width at a distance). */
+  focalNorm?: number;
 }
 
 export type CueDensity = 'calm' | 'normal' | 'detailed';
@@ -73,6 +99,12 @@ export interface PolicyOutput {
   sources: CueSource[];
   blocked: boolean;
   guideSide: 'left' | 'right' | null;
+  /** Blocked, and the path model sees no walkable way around on either side. */
+  noWayAround: boolean;
+  /** What decided the guide side. */
+  guideFrom: 'path' | 'clutter' | null;
+  /** Sector where the looming pathway fired with no recognised object to explain it. */
+  unexplainedLooming: Zone | null;
 }
 
 /**
@@ -90,15 +122,28 @@ export class CuePolicy {
   private lastBlockedSeen = -Infinity;
   private blockedActive = false;
   private guide: 'left' | 'right' | null = null;
+  private lastLoomZone: Zone | null = null;
+  /** Path decisions must persist before they change what we say/play. */
+  private pending: { d: string; n: number } = { d: '', n: 0 };
+  private settled: 'left' | 'right' | 'none' | 'unknown' = 'unknown';
 
   reset(): void {
+    this.settled = 'unknown';
+    this.pending = { d: '', n: 0 };
     this.state.clear();
     this.blockedActive = false;
     this.guide = null;
   }
 
-  update(tracks: readonly Track[], now: number, cfg: PolicyConfig, loomingCenter = false): PolicyOutput {
+  update(tracks: readonly Track[], now: number, cfg: PolicyConfig, envOrLooming: PolicyEnv | boolean = {}): PolicyOutput {
+    const env: PolicyEnv = typeof envOrLooming === 'boolean' ? { loomingCenter: envOrLooming } : envOrLooming;
     const live = tracks.filter((t) => t.confirmed);
+    // Looming pathway: a sector fires. If a tracked object there explains it,
+    // that object's cue becomes urgent; if not, it's an unrecognised threat.
+    const loomZone = env.lgmd?.looming ?? null;
+    const explained = loomZone ? live.find((t) => t.zone === loomZone && t.distance < 6) : undefined;
+    const unexplainedLooming = loomZone && !explained ? loomZone : null;
+    const loomingCenter = !!env.loomingCenter || unexplainedLooming === 'center';
     const liveIds = new Set(live.map((t) => t.id));
     for (const id of this.state.keys()) if (!liveIds.has(id)) this.state.delete(id);
 
@@ -121,7 +166,11 @@ export class CuePolicy {
     } else if (this.blockedActive && now - this.lastBlockedSeen > BLOCK_RELEASE_MS) {
       this.blockedActive = false;
       this.guide = null;
+      this.settled = 'unknown';
+      this.pending = { d: '', n: 0 };
     }
+    let noWayAround = false;
+    let guideFrom: PolicyOutput['guideFrom'] = null;
 
     const sources: CueSource[] = [];
     const blockerId = this.blockedActive && nearest ? nearest.id : undefined;
@@ -143,7 +192,54 @@ export class CuePolicy {
         triggered: blockTriggered,
       });
 
-      const side = this.freerSide(live, blockerId);
+      let side: 'left' | 'right' | null = null;
+      // Path-aware guidance: step to the side where the PATH continues with
+      // room to pass, not merely the side with fewer objects.
+      // Hysteresis on the clearance: once a side is chosen it takes clearly
+      // less room to give up on it, and clearly more to leave "no way around".
+      const baseNeed = Math.min(0.5, Math.max(0.06, (PASS_CLEARANCE_M * (cfg.focalNorm ?? 0.78)) / Math.max(0.5, nearest?.distance ?? 1)));
+      const need = baseNeed * (this.settled === 'left' || this.settled === 'right' ? 0.8 : this.settled === 'none' ? 1.15 : 1);
+      // Only re-decide on a fresh sighting: while the blocker is merely
+      // remembered (just vanished), keep the last decision.
+      const fresh = nearest !== undefined && nearest.lastSeen >= now - 1;
+      // No recognised blocker but depth measured one: an image box for it.
+      const fn = cfg.focalNorm ?? 0.78;
+      const dob = !nearest && env.depthObstacle && env.depthObstacle.z > 0.2 ? env.depthObstacle : null;
+      const depthBox = dob
+        ? (() => {
+            const cx = 0.5 + (dob.x / dob.z) * fn, bw = Math.min(0.6, Math.max(0.08, (0.45 * fn) / dob.z));
+            return { x: cx - bw / 2, y: 0.3, w: bw, h: 0.6 };
+          })()
+        : null;
+      const decision =
+        env.path && nearest && nearest.distance < releaseDist
+          ? fresh
+            ? chooseGuide(env.path, nearest.box, need, this.guide)
+            : this.settled
+          : env.path && depthBox
+            ? chooseGuide(env.path, depthBox, need, this.guide)
+            : 'unknown';
+      // Debounce: a new decision must hold for a few frames (a half-formed box
+      // while someone moves must not flip "step left" to "no way around").
+      if (decision === this.pending.d) this.pending.n++;
+      else this.pending = { d: decision, n: 1 };
+      const needFrames = decision === 'none' ? 4 : 3;
+      // A first side choice can apply at once; "no way around" must always persist.
+      if ((this.settled === 'unknown' && decision !== 'none') || this.pending.n >= needFrames) this.settled = decision;
+      const settled = this.settled;
+      if (settled === 'left' || settled === 'right') {
+        side = settled;
+        guideFrom = 'path';
+      } else if (settled === 'none') {
+        noWayAround = true;
+      } else if (depthBox) {
+        // Step away from where depth says it is.
+        side = depthBox.x + depthBox.w / 2 > 0.5 ? 'left' : 'right';
+        guideFrom = 'clutter';
+      } else {
+        side = this.freerSide(live, blockerId);
+        guideFrom = side ? 'clutter' : null;
+      }
       const guideTriggered = side !== null && side !== this.guide;
       this.guide = side;
       if (side) {
@@ -183,7 +279,9 @@ export class CuePolicy {
         const moved = budget.recueOnZoneChange && t.zone !== st.zone;
         const sinceCue = now - st.lastCueAt;
         // Becoming very near always re-cues quickly; everything else waits its turn.
-        const urgent = t.band === 'veryNear' && st.band !== 'veryNear' && sinceCue >= 1200;
+        const urgent =
+          (t.band === 'veryNear' && st.band !== 'veryNear' && sinceCue >= 1200) ||
+          (explained?.id === t.id && sinceCue >= 1200); // the looming pathway confirms it's coming at you
         if (inRange && !sideStatic && (urgent || ((closer || moved) && sinceCue >= budget.minRecueMs))) {
           st.activeUntil = now + budget.burstMs;
           st.lastCueAt = now;
@@ -211,6 +309,7 @@ export class CuePolicy {
         label: t.label,
         zone: t.zone,
         azimuth: t.azimuth,
+        elevation: t.elevation,
         distance: t.distance,
         band: t.band,
         rateHz: pulseRateHz(t.distance),
@@ -226,11 +325,35 @@ export class CuePolicy {
           CATEGORY_PRIORITY[b.kind as keyof typeof CATEGORY_PRIORITY] || a.distance - b.distance,
     );
 
+    if (unexplainedLooming && unexplainedLooming !== 'center' && sources.length < cfg.maxSources) {
+      const triggered = this.lastLoomZone !== unexplainedLooming;
+      sources.push({
+        key: 'looming',
+        kind: 'looming',
+        zone: unexplainedLooming,
+        azimuth: unexplainedLooming === 'left' ? -0.45 : 0.45,
+        distance: 2,
+        band: 'near',
+        rateHz: 2.5,
+        continuous: false,
+        urgency: 0.6 + 0.4 * (env.lgmd?.strength ?? 0),
+        secondTone: false,
+        triggered,
+      });
+    }
+    this.lastLoomZone = unexplainedLooming;
     for (const c of candidates) {
       if (sources.length >= cfg.maxSources) break;
       sources.push(c);
     }
-    return { sources: sources.slice(0, cfg.maxSources), blocked: this.blockedActive, guideSide: this.guide };
+    return {
+      sources: sources.slice(0, cfg.maxSources),
+      blocked: this.blockedActive,
+      guideSide: this.guide,
+      noWayAround,
+      guideFrom,
+      unexplainedLooming,
+    };
   }
 
   /** Side with less (and farther) clutter; null if both sides are crowded and close. */

@@ -84,6 +84,13 @@ export class MotionSensor {
   private hasGravity = false;
   private readonly invert = /iPad|iPhone|iPod/.test(navigator.userAgent); // iOS reports the opposite sign
   private listening = false;
+  /**
+   * How far you've turned (radians, + = to the right), integrated from the
+   * gyroscope around the gravity axis. Drifts slowly, which is fine for its
+   * job: keeping remembered objects in place for a few seconds as you turn.
+   */
+  yaw = 0;
+  private lastGyroT = 0;
 
   /** iOS needs permission from a tap. Call from the Start button handler. */
   async start(): Promise<boolean> {
@@ -119,6 +126,15 @@ export class MotionSensor {
     };
   }
 
+  /**
+   * Feed one sensor sample directly (the simulator uses this; real devices
+   * arrive through devicemotion events). Same conventions as Android
+   * DeviceMotionEvent: acceleration incl. gravity in m/s^2, rotation in deg/s.
+   */
+  ingest(a: { x: number; y: number; z: number }, rr: { alpha: number; beta: number; gamma: number } | null, t: number): void {
+    this.onMotion({ accelerationIncludingGravity: a, rotationRate: rr, timeStamp: t } as unknown as DeviceMotionEvent);
+  }
+
   private onMotion = (e: DeviceMotionEvent): void => {
     const a = e.accelerationIncludingGravity;
     if (!a || a.x === null || a.y === null || a.z === null) return;
@@ -131,6 +147,17 @@ export class MotionSensor {
     this.gravity.y += lp * (y - this.gravity.y);
     this.gravity.z += lp * (z - this.gravity.z);
     this.hasGravity = true;
-    this.steps.push(Math.hypot(x, y, z), e.timeStamp || performance.now());
+    const now = e.timeStamp || performance.now();
+    this.steps.push(Math.hypot(x, y, z), now);
+    const rr = e.rotationRate;
+    if (rr && rr.alpha !== null && rr.beta !== null && rr.gamma !== null) {
+      const dt = this.lastGyroT ? Math.min(0.1, (now - this.lastGyroT) / 1000) : 0;
+      const g = this.gravity;
+      const n = Math.hypot(g.x, g.y, g.z) || 1;
+      // Rotation about "up" (right-hand rule) is a LEFT turn, so negate.
+      const yawRateDeg = -((rr.beta * g.x + rr.gamma * g.y + rr.alpha * g.z) / n);
+      this.yaw += ((yawRateDeg * Math.PI) / 180) * dt;
+    }
+    this.lastGyroT = now;
   };
 }

@@ -1,4 +1,5 @@
 import type { FrameReport } from '../app/session';
+import { COLS, ROI_TOP, ROWS } from '../perception/freespace';
 
 const COLORS = { person: '#ffd60a', vehicle: '#ff4d6d', static: '#4cc9f0' } as const;
 
@@ -44,6 +45,26 @@ export function drawOverlay(canvas: HTMLCanvasElement, video: HTMLVideoElement, 
     g.stroke();
   }
   g.setLineDash([]);
+
+  // Walkable path (looks like the ground under your feet): green cells.
+  if (r.path && r.path.confidence > 0) {
+    g.fillStyle = 'rgba(0, 230, 120, 0.28)';
+    for (let row = 0; row < ROWS; row++)
+      for (let c = 0; c < COLS; c++) {
+        if (!r.path.path[row * COLS + c]) continue;
+        const x = X(c / COLS), y = Y(ROI_TOP + (row / ROWS) * (1 - ROI_TOP));
+        g.fillRect(x, y, w / COLS + 0.5, (h * (1 - ROI_TOP)) / ROWS + 0.5);
+      }
+  }
+  // Looming pathway: per-sector excitation bars along the top.
+  if (r.lgmd) {
+    (['left', 'center', 'right'] as const).forEach((sec, i) => {
+      const st = r.lgmd!.sectors[sec];
+      const v = Math.max(0, Math.min(1, st.z / 8));
+      g.fillStyle = r.lgmd!.looming === sec ? '#ff2d2d' : st.spike ? '#ffb020' : 'rgba(255,255,255,0.5)';
+      g.fillRect(X(i / 3) + 4, Y(0) + 4, (w / 3 - 8) * v, 6);
+    });
+  }
 
   if (r.policy.blocked) {
     g.fillStyle = 'rgba(255,0,0,0.25)';

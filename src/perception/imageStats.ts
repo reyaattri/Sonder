@@ -1,7 +1,7 @@
 /**
  * Cheap whole-frame checks on a tiny grayscale thumbnail (e.g. 64x48):
- * brightness and sharpness for the low-light warning, and image expansion
- * for the "large looming surface" stretch goal (US-2.4).
+ * brightness and sharpness for the low-light warning. (Looming now lives in
+ * lgmd.ts; `expansion` is kept as a simple zoom estimator.)
  */
 export interface Gray {
   data: Float32Array;
@@ -97,34 +97,4 @@ export function expansion(prev: Gray, cur: Gray): { scale: number; gain: number 
   let best = 0;
   for (let i = 1; i < errs.length; i++) if (errs[i] < errs[best]) best = i;
   return { scale: SCALES[best], gain: errs[0] > 0 ? 1 - errs[best] / errs[0] : 0 };
-}
-
-/**
- * Flags a looming surface when the center keeps expanding fast enough that
- * contact is under ~1.5 s, for several frames in a row. Experimental:
- * featureless glass gives no signal, and camera shake can mimic expansion.
- */
-export class LoomingDetector {
-  private prev: Gray | null = null;
-  private prevT = 0;
-  private streak = 0;
-
-  reset(): void {
-    this.prev = null;
-    this.streak = 0;
-  }
-
-  update(g: Gray, t: number): boolean {
-    let looming = false;
-    if (this.prev && sharpness(g) > BLUR_VAR) {
-      const dt = (t - this.prevT) / 1000;
-      const { scale, gain } = expansion(this.prev, g);
-      const tau = scale > 1 && dt > 0 ? dt / Math.log(scale) : Infinity;
-      this.streak = tau < 1.5 && gain > 0.08 ? this.streak + 1 : 0;
-      looming = this.streak >= 4;
-    }
-    this.prev = g;
-    this.prevT = t;
-    return looming;
-  }
 }

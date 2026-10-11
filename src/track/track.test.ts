@@ -32,8 +32,11 @@ describe('lane feedback', () => {
   it('confirms recovery once after returning to centre', () => {
     const f = new LaneFeedback();
     f.update(-0.3, false, 0, cfg);
-    expect(f.update(0, false, 100, cfg).recovered).toBe(true);
-    expect(f.update(0, false, 200, cfg).recovered).toBe(false);
+    f.update(-0.3, false, 900, cfg); // a drift that lasted
+    expect(f.update(0, false, 1000, cfg).recovered).toBe(true);
+    expect(f.update(0, false, 1100, cfg).recovered).toBe(false);
+    f.update(0.2, false, 1200, cfg); // tiny wobble
+    expect(f.update(0, false, 1300, cfg).recovered).toBe(false);
   });
 
   it('haptics: left = one pulse, right = two, longer when stronger', () => {

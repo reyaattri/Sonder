@@ -17,6 +17,21 @@
     <div id="sr-polite" class="sr-only" role="status" aria-live="polite"></div>
     <div id="sr-assertive" class="sr-only" role="alert" aria-live="assertive"></div>
 
+    <!-- Voice menu (eyes-free start screen) -->
+    <main id="screen-voice" class="screen voice">
+      <div class="voice-top">
+        <button type="button" id="btn-visual-menu" class="linkish">Visual menu</button>
+      </div>
+      <h1 tabindex="-1" id="voice-title">EchoPath</h1>
+      <p id="voice-prompt" class="lead">Tap anywhere to start. EchoPath will talk you through it.</p>
+      <ol id="voice-options" class="voice-options" aria-hidden="true"></ol>
+      <p id="voice-heard" class="hint"></p>
+      <button type="button" id="voice-target" class="voice-target">
+        <span id="voice-target-label">Tap anywhere to start</span>
+        <span class="voice-gestures">Tap: choose · Hold: next option · Double-tap: back</span>
+      </button>
+    </main>
+
     <!-- Home -->
     <main id="screen-welcome" class="screen home" data-active>
       <header class="brand">
@@ -48,6 +63,7 @@
       <section class="card" aria-labelledby="track-title" id="track-card" hidden>
         <h2 id="track-title">Track setup</h2>
         <p class="hint">Strap the phone to your chest, back camera facing forward and tilted slightly down so it sees the lane lines a few steps ahead.</p>
+        <p class="hint"><strong>Training aid.</strong> In competition, World Para Athletics requires T11 athletes to run tethered to a guide, and some races ban earphones for para athletes. Check your race's rules, and train with a sighted guide nearby.</p>
         <ul class="checks">
           <li data-check="gps"><span class="dot"></span><span class="what">GPS (pace and distance)</span><span class="val">Asks when you start</span></li>
           <li data-check="hr"><span class="dot"></span><span class="what">Heart rate</span><span class="val">Not connected</span></li>
@@ -83,6 +99,28 @@
         <button id="btn-sound" type="button">Sound check</button>
         <button id="btn-settings-welcome" type="button">Settings</button>
       </div>
+      <button id="btn-voice-menu" type="button">Voice menu (eyes-free)</button>
+      <section class="card" aria-labelledby="practice-title">
+        <h2 id="practice-title">Practice and real-world tests</h2>
+        <p class="hint">No need to go outside: run EchoPath's real pipeline on a simulated world, or on real footage.</p>
+        <label class="field">Scene
+          <select id="practice-scene">
+            <optgroup label="Simulation (real EchoPath pipeline, simulated world)">
+              <option value="walk">Walk: park path with poles, bins, benches, rocks, leaves, people</option>
+              <option value="stadium">Run: 400 m track, lane 3</option>
+              <option value="road">Run: road with yellow guide line</option>
+              <option value="purple">Run: Project Guideline purple line (Google's model)</option>
+            </optgroup>
+            <optgroup label="Real world (real footage, not simulated)">
+              <option value="pg-photo">Real photo: Google Project Guideline test path, checked against Google's labels</option>
+              <option value="video-walk">Real video: your own walking recording</option>
+              <option value="video-run">Real video: your own running recording</option>
+            </optgroup>
+          </select>
+        </label>
+        <input type="file" id="practice-file" accept="video/*" hidden />
+        <button id="btn-practice" type="button">Start practice</button>
+      </section>
       <p class="note">Everything runs on this phone. Nothing is recorded or uploaded.</p>
       <p class="note">EchoPath is a supplementary aid. Keep using your cane, guide dog or sighted help.</p>
     </main>
@@ -111,6 +149,16 @@
           <li data-check="out-delay"><span class="dot"></span><span class="what">Sound delay</span><span class="val" id="out-delay">Unknown</span></li>
         </ul>
         <div id="out-problem" class="problem" hidden></div>
+        <details class="bt-help">
+          <summary>Bluetooth headphones on a Windows laptop: fix steps</summary>
+          <ol>
+            <li>Turn the headphones on. If they're connected to your phone, disconnect them there (or use their multipoint mode).</li>
+            <li>Windows Settings, Bluetooth and devices: select your headphones, then Connect. Wait until it says "Connected music".</li>
+            <li>Sound settings, Output: choose the entry called <em>Headphones (your headphones)</em>, not <em>Headset (… Hands-Free)</em>. Hands-free is mono, so left and right can't work.</li>
+            <li>If Windows keeps switching to Hands-Free: Control Panel, Devices and Printers, right-click the headphones, Properties, Services, and untick <em>Hands-free Telephony</em>.</li>
+            <li>Come back here and press <em>Reconnect sound</em>, then <em>Circle me</em>.</li>
+          </ol>
+        </details>
         <button id="btn-reconnect" type="button">Headphones just connected? Reconnect sound</button>
       </section>
 
@@ -118,7 +166,7 @@
         <h2 id="dir-title">Direction test</h2>
         <div class="row3">
           <button type="button" data-tone="left">Left</button>
-          <button type="button" data-tone="sweep">Sweep</button>
+          <button type="button" data-tone="sweep">Circle me</button>
           <button type="button" data-tone="right">Right</button>
         </div>
         <button id="btn-hp-guided" type="button">Guided headphone check</button>
@@ -173,6 +221,23 @@
         <li class="chip" id="chip-perf"><span class="dot"></span><span class="txt">Starting</span></li>
         <li class="chip" id="chip-battery" hidden><span class="dot"></span><span class="txt"></span></li>
       </ul>
+      <section class="sim" id="wsim-panel" hidden aria-label="Walk simulator">
+        <div class="sim-view" id="wsim-view" aria-hidden="true">
+          <canvas id="wsim-overlay"></canvas>
+        </div>
+        <div class="sim-controls">
+          <button type="button" id="wsim-left" aria-label="Step left (hold)">◀ Left</button>
+          <button type="button" id="wsim-auto" aria-pressed="true">Autopilot: on</button>
+          <button type="button" id="wsim-right" aria-label="Step right (hold)">Right ▶</button>
+        </div>
+        <select id="wsim-scene" aria-label="Simulated scene">
+          <option value="walk">Walk: park path with obstacles and people</option>
+          <option value="stadium">Run: 400 m track, lane 3</option>
+          <option value="road">Run: road with yellow guide line</option>
+          <option value="purple">Run: Project Guideline purple line</option>
+        </select>
+        <p class="sim-truth" id="wsim-truth" aria-live="off"></p>
+      </section>
       <div class="stage">
         <canvas id="radar" aria-hidden="true"></canvas>
         <div class="pip" id="pip" hidden>
@@ -204,6 +269,27 @@
         <li class="chip" id="tchip-hr"><span class="dot"></span><span class="txt">No HR</span></li>
         <li class="chip" id="tchip-perf"><span class="dot"></span><span class="txt">Starting</span></li>
       </ul>
+      <section class="sim" id="sim-panel" hidden aria-label="Simulator">
+        <div class="sim-view" id="sim-view" aria-hidden="true">
+          <canvas id="sim-overlay"></canvas>
+        </div>
+        <div class="sim-controls">
+          <button type="button" id="sim-left" aria-label="Steer left (hold)">◀ Left</button>
+          <button type="button" id="sim-auto" aria-pressed="true">Autopilot: on</button>
+          <button type="button" id="sim-right" aria-label="Steer right (hold)">Right ▶</button>
+        </div>
+        <div class="sim-controls">
+          <select id="sim-course" aria-label="Simulated course">
+            <option value="stadium">400 m track, lane 3</option>
+            <option value="road">Road with yellow guide line</option>
+            <option value="purple">Project Guideline purple line (Google's model)</option>
+            <option value="walk">Walk: park path with obstacles and people</option>
+          </select>
+          <button type="button" id="sim-slower" aria-label="Slower">−</button>
+          <button type="button" id="sim-faster" aria-label="Faster">+</button>
+        </div>
+        <p class="sim-truth" id="sim-truth" aria-live="off"></p>
+      </section>
       <div class="stage">
         <canvas id="lane-gauge" aria-hidden="true"></canvas>
         <div class="pip" id="tpip" hidden>
@@ -273,10 +359,37 @@
 
         <fieldset>
           <legend>Track run</legend>
-          <label>Drift cue comes from
-            <select name="trackCueSide">
-              <option value="line">The line I'm drifting onto (like a rumble strip)</option>
-              <option value="steer">The side I should move toward</option>
+          <label>Course
+            <select name="trackCourse">
+              <option value="lanes">Running track: stay between my two lane lines</option>
+              <option value="line">Guide line: run along one painted line (road racing line, guide line)</option>
+              <option value="edge">Kerb or edge: keep a line on one side of me (road race)</option>
+            </select>
+          </label>
+          <div class="row2">
+            <label>Line colour
+              <select name="lineColor">
+                <option value="white">White</option>
+                <option value="yellow">Yellow</option>
+                <option value="blue">Blue</option>
+                <option value="purple">Purple (Google Project Guideline line)</option>
+                <option value="any">Any bright line</option>
+              </select>
+            </label>
+            <label>Edge line side
+              <select name="edgeSide">
+                <option value="left">On my left</option>
+                <option value="right">On my right</option>
+              </select>
+            </label>
+          </div>
+          <label>Drift feedback style
+            <select name="trackStyle">
+              <option value="pg">Google Project Guideline sounds (recommended): their steering, warning, turn and stop sounds, with a buzz in the ear of the side to turn</option>
+              <option value="glide">Smooth glide: a soft tone that rises from low to high as you need to correct, from the side to steer toward</option>
+              <option value="rumble">Rumble strip: clicks from the line I'm drifting onto</option>
+              <option value="guideline">Guideline (Google Project Guideline style): beeps on the side to steer toward, high warning at the edge</option>
+              <option value="tone">Continuous tone: steady when on line, moves and turns dissonant as I drift</option>
             </select>
           </label>
           <label><span>Free zone before cues: <output name="deadbandOut"></output>% of the lane</span>
@@ -299,7 +412,23 @@
             <label><span>Step length (m), used without GPS</span><input type="number" name="runStepLength" min="0.4" max="2.2" step="0.05" /></label>
             <label><span>Heart-rate alert above (0 = off)</span><input type="number" name="maxHeartRate" min="0" max="230" step="1" /></label>
           </div>
-          <label class="row"><input type="checkbox" name="trackObstacles" /> Warn about runners directly ahead</label>
+          <div class="row2">
+            <label><span>Camera height (m): chest 1.3, waist 1.0</span><input type="number" name="mountHeight" min="0.6" max="1.8" step="0.05" /></label>
+            <label><span>Distance from kerb, edge course (m)</span><input type="number" name="edgeGap" min="0.2" max="2" step="0.1" /></label>
+          </div>
+          <label><span>Ear vibration on the side to turn <span class="hint">(a low buzz you feel through the headphones)</span></span>
+            <input type="range" aria-label="Ear vibration" name="earVibration" min="0" max="100" step="5" />
+          </label>
+          <label class="row"><input type="checkbox" name="runBeacon" /> 360 guide beacon: a soft sound at the point ahead to run toward</label>
+          <label class="row"><input type="checkbox" name="trackObstacles" /> Warn about runners directly ahead (and which side to pass on roads)</label>
+          <div class="row2">
+            <label><span>Target pace per km (mm:ss, blank = off)</span><input type="text" inputmode="numeric" name="targetPace" placeholder="5:30" /></label>
+            <label><span>Cadence metronome (steps/min, 0 = off)</span><input type="number" name="metronomeSpm" min="0" max="220" step="2" /></label>
+          </div>
+          <div class="row2">
+            <label><span>Max heart rate for zones (0 = off)</span><input type="number" name="hrMax" min="0" max="230" step="1" /></label>
+            <label class="row"><input type="checkbox" name="trackCountdown" /> 3, 2, 1, go before starting</label>
+          </div>
         </fieldset>
 
         <fieldset>
@@ -316,6 +445,7 @@
               <option value="toward">Points toward me (laptop webcam)</option>
             </select>
           </label>
+          <label class="row"><input type="checkbox" name="wideAngle" /> Use the ultra-wide lens when the phone has one (sees more)</label>
           <label>Sound output
             <select name="audioOutputId" id="output-select">
               <option value="">System default</option>
@@ -325,7 +455,16 @@
             Pair your Bluetooth headphones in your phone or computer's Bluetooth settings first. Bluetooth adds some
             delay to cues; wired or low-latency earbuds react fastest.
           </p>
-          <button type="button" id="btn-spatial-test" class="secondary">Test spatial sound (left, ahead, right)</button>
+          <label>Audio buffer
+            <select name="latencyMode">
+              <option value="auto">Automatic (larger for Bluetooth, to stop crackling)</option>
+              <option value="interactive">Fastest (wired headphones)</option>
+              <option value="balanced">Balanced (most Bluetooth)</option>
+              <option value="playback">Smoothest (Bluetooth that keeps crackling)</option>
+            </select>
+          </label>
+          <label class="row"><input type="checkbox" name="btKeepAlive" /> Keep Bluetooth headphones awake (stops the first cue being cut off)</label>
+          <button type="button" id="btn-spatial-test" class="secondary">Test spatial sound (full circle)</button>
         </fieldset>
 
         <fieldset>
@@ -337,6 +476,23 @@
           </label>
           <label><span>Direction width: <output name="spreadOut"></output>x <span class="hint">(wider makes left and right clearer)</span></span>
             <input type="range" aria-label="Direction width" name="spatialSpread" min="1" max="3" step="0.1" />
+          </label>
+          <label>Sound scene
+            <select name="soundScene">
+              <option value="surround">Surround (8D): hear everything around me, continuously</option>
+              <option value="cues">Cues only: just the alerts</option>
+            </select>
+          </label>
+          <label><span>Surround loudness <span class="hint">(under the alerts)</span></span>
+            <input type="range" aria-label="Surround loudness" name="sceneLevel" min="0" max="100" step="5" />
+          </label>
+          <label class="row"><input type="checkbox" name="depthCane" /> Virtual white cane: depth AI finds any obstacle in my path, even at head height (no LiDAR needed)</label>
+          <label>Echolocation clicks
+            <select name="echoEverySec">
+              <option value="0">Off</option>
+              <option value="1.5">Every 1.5 seconds</option>
+              <option value="3">Every 3 seconds</option>
+            </select>
           </label>
           <label>Cue sound style
             <select name="soundStyle">
@@ -371,7 +527,7 @@
               <option value="yolox_nano">YOLOX-nano (ONNX Runtime)</option>
             </select>
           </label>
-          <label class="row"><input type="checkbox" name="looming" /> Warn about walls and large surfaces (experimental)</label>
+          <label class="row"><input type="checkbox" name="looming" /> Looming detector: warn about anything rushing toward me, even things it can't name (locust-inspired)</label>
         </fieldset>
 
         <fieldset>

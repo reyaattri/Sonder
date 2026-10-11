@@ -3,7 +3,7 @@ import type { Detection } from '../core/types';
 import { azimuthRad, bandOf, distanceM, focalPx, iou, pulseRateHz } from './geometry';
 import { filterDetections, inCorridor, zoneOf, zonePan } from './zones';
 import { timeToContact, Tracker } from './tracker';
-import { expansion, frameQuality, LoomingDetector, type Gray } from './imageStats';
+import { expansion, frameQuality, type Gray } from './imageStats';
 
 const frame = { width: 1280, height: 720 };
 const f = focalPx(frame, 65);
@@ -173,19 +173,5 @@ describe('image stats', () => {
     const r = expansion(texture(1), texture(1.07));
     expect(r.scale).toBeCloseTo(1.07, 2);
     expect(expansion(texture(1), texture(1)).scale).toBe(1);
-  });
-
-  it('looming fires only on sustained fast expansion', () => {
-    const det = new LoomingDetector();
-    let s = 1, fired = false;
-    for (let i = 0; i < 8; i++) {
-      fired = det.update(texture(s), i * 66) || fired;
-      s *= 1.07;
-    }
-    expect(fired).toBe(true);
-    const still = new LoomingDetector();
-    let any = false;
-    for (let i = 0; i < 8; i++) any = still.update(texture(1), i * 66) || any;
-    expect(any).toBe(false);
   });
 });

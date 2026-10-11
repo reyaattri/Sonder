@@ -54,6 +54,25 @@ export function drawRadar(canvas: HTMLCanvasElement, r: FrameReport | null, fovD
   g.lineWidth = 1.5;
   g.stroke();
 
+  // Looming pathway: the firing sector's slice of the wedge lights up
+  // (red if no recognised object explains it).
+  if (r?.lgmd) {
+    const sectors: ['left' | 'center' | 'right', number][] = [['left', -1], ['center', 0], ['right', 1]];
+    for (const [sec, k] of sectors) {
+      const st = r.lgmd.sectors[sec];
+      if (!st.spike && r.lgmd.looming !== sec) continue;
+      const a0 = -Math.PI / 2 + (k - 0.5) * ((2 * half) / 3), a1 = a0 + (2 * half) / 3;
+      g.beginPath();
+      g.moveTo(ox, oy);
+      g.arc(ox, oy, R, a0, a1);
+      g.closePath();
+      g.globalAlpha = r.lgmd.looming === sec ? 0.45 : 0.15;
+      g.fillStyle = r.policy.unexplainedLooming === sec ? danger : css('--warn');
+      g.fill();
+      g.globalAlpha = 1;
+    }
+  }
+
   // Blocked path: red wedge straight ahead
   if (r?.policy.blocked) {
     const pulse = 0.35 + 0.25 * Math.sin(now / 90);

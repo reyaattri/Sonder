@@ -7,7 +7,7 @@ import { assetUrl, BASE_SCORE_THRESHOLD, MAX_RESULTS, MODELS, type Detector, typ
  * workers forbid. Pre-fetch the loader script and evaluate it in global
  * scope instead, so the same code runs in module workers and on the page.
  */
-async function patchImportScripts(loaderUrl: string): Promise<void> {
+export async function patchImportScripts(loaderUrl: string): Promise<void> {
   const g = self as unknown as { importScripts?: (u: string) => void; document?: unknown };
   if (typeof g.document !== 'undefined') return; // main thread: MediaPipe uses a <script> tag
   const src = await (await fetch(loaderUrl)).text();

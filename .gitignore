@@ -5,3 +5,5 @@ public/models/
 public/vendor/
 *.log
 .DS_Store
+public/sounds/
+public/samples/

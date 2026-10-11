@@ -28,6 +28,9 @@ const STALE_MS = 1500;
 export class Announcer {
   voiceGuidance = true;
   private queue: Pending[] = [];
+  /** Non-critical speech budget: one every 6 s, no repeats within 20 s. */
+  private lastWarnAt = -Infinity;
+  private recent = new Map<string, number>();
   private speaking = false;
   private lastStart = -Infinity;
   private timer: number | undefined;
@@ -70,6 +73,16 @@ export class Announcer {
       this.showText(text, true);
       return;
     }
+    // Speech limiter for non-critical messages (critical ones use interrupt).
+    if (!system && !opts.interrupt) {
+      const now = performance.now();
+      const seen = this.recent.get(text);
+      if (seen !== undefined && now - seen < 20000) return;
+      if (now - this.lastWarnAt < 6000) return;
+      this.lastWarnAt = now;
+      this.recent.set(text, now);
+      if (this.recent.size > 50) this.recent.clear();
+    }
     if (opts.interrupt) {
       this.queue = [];
       this.synth.cancel();
@@ -84,6 +97,19 @@ export class Announcer {
   /** Whether a new warning could be spoken right now (used to avoid queueing stale ones). */
   get ready(): boolean {
     return !this.speaking && performance.now() - this.lastStart >= MIN_GAP_MS;
+  }
+
+  /** Resolves once nothing is being said or queued (e.g. before listening for a reply). */
+  whenIdle(maxMs = 20000): Promise<void> {
+    const t0 = performance.now();
+    return new Promise((resolve) => {
+      const check = () => {
+        const busy = this.speaking || this.queue.length > 0 || !!this.synth?.speaking;
+        if (!busy || performance.now() - t0 > maxMs) resolve();
+        else setTimeout(check, 120);
+      };
+      setTimeout(check, 150);
+    });
   }
 
   cancel(): void {

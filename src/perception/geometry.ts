@@ -5,6 +5,13 @@ import type { Box, DistanceBand, FrameSize } from '../core/types';
  * frame's LONG side, so the estimate holds whether the phone is portrait
  * (lanyard, chest pocket) or landscape.
  */
+/** Field of view after optical zoom (zoom 0.5 on an ultra-wide roughly doubles tan(fov/2)). */
+export function effectiveFov(fovDeg: number, zoom = 1): number {
+  if (!(zoom > 0) || zoom === 1) return fovDeg;
+  const t = Math.tan((fovDeg * Math.PI) / 360) / zoom;
+  return Math.min(150, (2 * Math.atan(t) * 180) / Math.PI);
+}
+
 export function focalPx(frame: FrameSize, fovDeg: number): number {
   const long = Math.max(frame.width, frame.height);
   return long / 2 / Math.tan((fovDeg * Math.PI) / 360);
@@ -74,3 +81,10 @@ export function iou(a: Box, b: Box): number {
 
 export const centerX = (b: Box) => b.x + b.w / 2;
 export const centerY = (b: Box) => b.y + b.h / 2;
+
+const MAX_AZ = (80 * Math.PI) / 180;
+
+/** Scale a camera azimuth by `spread`, capped at 80 deg so it never flips behind. */
+export function spreadAzimuth(az: number, spread: number): number {
+  return Math.max(-MAX_AZ, Math.min(MAX_AZ, az * spread));
+}

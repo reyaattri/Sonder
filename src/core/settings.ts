@@ -23,8 +23,13 @@ export interface Settings {
   centerWidth: number;
   /** Center-zone obstacle closer than this (metres) means "blocked path". */
   blockDistance: number;
-  /** Stretch: flag fast-approaching surfaces (walls) by image expansion. */
+  /**
+   * Locust-inspired looming detector: warns about anything rushing toward you,
+   * even objects the detector can't name (poles, doors, branches).
+   */
   looming: boolean;
+  /** Use the ultra-wide camera zoom where the phone supports it (wider view). */
+  wideAngle: boolean;
   debugOverlay: boolean;
   /** 'auto' follows the device's light/dark setting. */
   theme: 'auto' | 'light' | 'dark';
@@ -53,13 +58,64 @@ export interface Settings {
   spatialSpread: number;
   /** A very soft tick every few seconds so the wearer knows EchoPath is still working. */
   heartbeat: boolean;
+  /**
+   * 'surround': "8D" 360-degree scene - every nearby thing has its own soft,
+   * continuous sound that moves around you in real time (cues play on top).
+   * 'cues': only the event cues.
+   */
+  soundScene: 'surround' | 'cues';
+  /** Loudness of the surround scene, 0..1. */
+  sceneLevel: number;
+  /**
+   * Virtual white cane: depth AI (no LiDAR needed) finds ANY obstacle in your
+   * path - walls, poles, doors, head-height branches - as a sonar tone.
+   */
+  depthCane: boolean;
+  /** Synthetic echolocation click every N seconds (0 = off). */
+  echoEverySec: number;
+  /** Audio buffer: 'auto' picks larger buffers for Bluetooth to stop crackle. */
+  latencyMode: 'auto' | 'interactive' | 'balanced' | 'playback';
+  /** Keep Bluetooth headphones awake with an inaudible signal. */
+  btKeepAlive: boolean;
+  /** Start in the spoken, tap-anywhere voice menu (eyes-free). */
+  voiceMenu: boolean;
 
   // ---- Track mode -------------------------------------------------------
   /**
-   * Which side the drift cue comes from. 'line' = from the line you are
-   * drifting onto (like a rumble strip). 'steer' = from the side to move toward.
+   * Course: 'lanes' = two lane lines (running track), 'line' = run along one
+   * painted guide line (Project Guideline-style / a road race's racing line),
+   * 'edge' = keep a kerb or edge line on one side (road races).
    */
-  trackCueSide: 'line' | 'steer';
+  trackCourse: 'lanes' | 'line' | 'edge';
+  /** Paint colour of the line(s) to follow. */
+  lineColor: 'white' | 'yellow' | 'blue' | 'purple' | 'any';
+  /** 'edge' course: which side the kerb/edge line stays on. */
+  edgeSide: 'left' | 'right';
+  /**
+   * Drift feedback style:
+   *  'rumble'    - clicks from the line you're drifting onto (like a rumble strip)
+   *  'guideline' - Google Project Guideline-style: beeps on the side to steer
+   *                toward, faster with drift, high warning at the edge
+   *  'tone'      - one continuous quiet tone; drifting moves it to the line's
+   *                side and makes it louder and dissonant
+   */
+  trackStyle: 'pg' | 'glide' | 'rumble' | 'guideline' | 'tone';
+  /** Strength of the "ear vibration" buzz on the side to turn toward (0 = off). */
+  earVibration: number;
+  /** 360 guide beacon at the point ahead to run toward. */
+  runBeacon: boolean;
+  /** Camera height above the ground (m): chest ~1.3, waist ~1.0. Used to measure the line in metres. */
+  mountHeight: number;
+  /** 'edge' course: how far to keep from the kerb/edge line (m). */
+  edgeGap: number;
+  /** Target pace, seconds per km (0 = no pace coaching). */
+  targetPaceS: number;
+  /** Cadence metronome, steps per minute (0 = off). */
+  metronomeSpm: number;
+  /** Maximum heart rate for zone announcements (0 = off). */
+  hrMax: number;
+  /** "3, 2, 1, go" before guidance starts. */
+  trackCountdown: boolean;
   /** Phone vibration on drift (Android; iPhones have no web vibration). */
   trackHaptics: boolean;
   /** Spoken run stats: every lap, every kilometre, every N minutes, or never. */
@@ -81,7 +137,7 @@ export interface Settings {
   settingsVersion: number;
 }
 
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 6;
 
 export type Mount = 'chest' | 'waist' | 'hand' | 'table';
 export type Activity = 'walk' | 'track';
@@ -104,7 +160,8 @@ export const DEFAULT_SETTINGS: Settings = {
   corridorWidth: 0.9,
   centerWidth: 0.34,
   blockDistance: 2,
-  looming: false,
+  looming: true,
+  wideAngle: true,
   debugOverlay: false,
   theme: 'auto',
   cameraId: '',
@@ -113,7 +170,25 @@ export const DEFAULT_SETTINGS: Settings = {
   mount: 'chest',
   spatialSpread: 2.2,
   heartbeat: false,
-  trackCueSide: 'line',
+  soundScene: 'surround',
+  sceneLevel: 0.5,
+  depthCane: true,
+  echoEverySec: 0,
+  latencyMode: 'auto',
+  btKeepAlive: true,
+  voiceMenu: true,
+  trackCourse: 'lanes',
+  lineColor: 'white',
+  edgeSide: 'left',
+  trackStyle: 'pg',
+  earVibration: 0.5,
+  runBeacon: true,
+  mountHeight: 1.3,
+  edgeGap: 0.6,
+  targetPaceS: 0,
+  metronomeSpm: 0,
+  hrMax: 0,
+  trackCountdown: true,
   trackHaptics: true,
   trackAnnounce: 'lap',
   trackAnnounceMinutes: 2,
@@ -157,6 +232,23 @@ export function migrate(s: Settings, raw: Partial<Settings>): Settings {
   if ((raw.settingsVersion ?? 1) < 2) {
     if (raw.model === 'efficientdet_lite0') s.model = DEFAULT_SETTINGS.model;
     if (raw.heartbeat === true) s.heartbeat = DEFAULT_SETTINGS.heartbeat;
+  }
+  if ((raw.settingsVersion ?? 1) < 3) {
+    // v3: the looming pathway is now the robust LGMD model, on by default.
+    if (raw.looming === false) s.looming = DEFAULT_SETTINGS.looming;
+  }
+  if ((raw.settingsVersion ?? 1) < 4) {
+    // v4: "cue side" became feedback styles; steer-side cues = Guideline style.
+    if ((raw as { trackCueSide?: string }).trackCueSide === 'steer') s.trackStyle = 'guideline';
+    delete (s as { trackCueSide?: string }).trackCueSide;
+  }
+  if ((raw.settingsVersion ?? 1) < 5) {
+    // v5: smooth gliding tone is the new default (no abrupt beeps).
+    if (!raw.trackStyle || raw.trackStyle === 'rumble') s.trackStyle = 'glide';
+  }
+  if ((raw.settingsVersion ?? 1) < 6) {
+    // v6: Google Project Guideline's own sounds are the default.
+    if (!raw.trackStyle || raw.trackStyle === 'glide' || raw.trackStyle === 'rumble') s.trackStyle = 'pg';
   }
   s.settingsVersion = SETTINGS_VERSION;
   return s;

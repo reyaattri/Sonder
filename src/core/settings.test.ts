@@ -12,9 +12,10 @@ describe('settings migration', () => {
   });
 
   it('v2 settings are left alone', () => {
-    const raw: Partial<Settings> = { model: 'efficientdet_lite0', heartbeat: true, settingsVersion: 2 };
+    const raw: Partial<Settings> = { model: 'efficientdet_lite0', heartbeat: true, looming: false, settingsVersion: 3 };
     const s = migrate({ ...DEFAULT_SETTINGS, ...raw }, raw);
     expect(s.model).toBe('efficientdet_lite0');
     expect(s.heartbeat).toBe(true);
+    expect(s.looming).toBe(false);
   });
 });

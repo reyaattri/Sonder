@@ -11,7 +11,16 @@
  * 4. Least-squares refinement per line on its inliers.
  * 5. Lane = nearest line left of centre + nearest line right of centre at the
  *    bottom row. Offset and heading follow from their positions.
+ *
+ * Course types: 'lanes' (two boundaries, running track), 'line' (run along a
+ * single painted guide line, as in Google's Project Guideline, or a road
+ * race's painted racing line) and 'edge' (keep a kerb/edge line on one side).
+ * Paint colour: white, yellow, blue or any bright marking. Curvature of the
+ * lines ahead gives early warning of bends.
  */
+
+export type CourseMode = 'lanes' | 'line' | 'edge';
+export type LineColor = 'white' | 'yellow' | 'blue' | 'purple' | 'any';
 
 /** x = a*y + b in frame pixels. */
 export interface LineFit {
@@ -31,6 +40,10 @@ export interface LaneMeasurement {
   widthPx: number | null;
   /** 0..1 */
   confidence: number;
+  /** + = the lines ahead bend right, - = left (difference of near/far slopes). Null if unknown. */
+  curvature: number | null;
+  /** Image points along each detected line (following curves), for the world-space map. */
+  keypoints: { left: { x: number; y: number }[]; right: { x: number; y: number }[] };
   /** For drawing/debug. */
   points: number;
   width: number;
@@ -42,12 +55,29 @@ export interface LaneOptions {
   roiTop: number;
   /** Remembered lane width (px at bottom row), used when only one line is visible. */
   expectedWidthPx?: number | null;
+  mode?: CourseMode;
+  color?: LineColor;
+  /** 'edge' mode: which side the kerb/edge line should be on. */
+  edgeSide?: 'left' | 'right';
+  /** 'line'/'edge' mode: where the line was last seen at the bottom row (px), to keep locked on it. */
+  expectedX?: number | null;
+}
+
+/** Where an edge line should sit: 30 % of the frame width to that side of centre. */
+export const EDGE_TARGET = 0.3;
+
+function hueOf(r: number, g: number, b: number): number {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  if (d === 0) return 0;
+  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h *= 60;
+  return h < 0 ? h + 360 : h;
 }
 
 const SLOPES = 61; // a in [-3, 3]
 const A_MAX = 3;
 
-export function paintMask(rgba: Uint8ClampedArray, w: number, h: number, roiTop: number): Uint8Array {
+export function paintMask(rgba: Uint8ClampedArray, w: number, h: number, roiTop: number, color: LineColor = 'white'): Uint8Array {
   const mask = new Uint8Array(w * h);
   const y0 = Math.floor(h * roiTop);
   const luma = new Float32Array(w);
@@ -64,10 +94,27 @@ export function paintMask(rgba: Uint8ClampedArray, w: number, h: number, roiTop:
     const std = Math.sqrt(Math.max(0, sum2 / w - mean * mean));
     const thr = mean + Math.max(28, 1.1 * std);
     for (let x = 0; x < w; x++) {
-      if (luma[x] < thr) continue;
       const i = (y * w + x) * 4;
-      const sat = Math.max(rgba[i], rgba[i + 1], rgba[i + 2]) - Math.min(rgba[i], rgba[i + 1], rgba[i + 2]);
-      if (sat < 80) mask[y * w + x] = 1;
+      const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+      const max = Math.max(r, g, b);
+      const sat = max - Math.min(r, g, b);
+      const satRel = max ? sat / max : 0;
+      let on = false;
+      if (color === 'white' || color === 'any') on = luma[x] >= thr && sat < 80;
+      if (!on && (color === 'yellow' || color === 'any')) {
+        const hue = hueOf(r, g, b);
+        on = hue >= 35 && hue <= 70 && satRel > 0.35 && luma[x] > mean * 0.9;
+      }
+      if (!on && color === 'purple') {
+        // Project Guideline's line paint (~RGB 144, 99, 205): violet hue.
+        const hue = hueOf(r, g, b);
+        on = hue >= 250 && hue <= 300 && satRel > 0.25;
+      }
+      if (!on && (color === 'blue' || color === 'any')) {
+        const hue = hueOf(r, g, b);
+        on = hue >= 190 && hue <= 250 && satRel > 0.3 && b > 60;
+      }
+      if (on) mask[y * w + x] = 1;
     }
   }
   return mask;
@@ -77,7 +124,8 @@ export function paintMask(rgba: Uint8ClampedArray, w: number, h: number, roiTop:
 export function candidatePoints(mask: Uint8Array, w: number, h: number, roiTop: number): { x: number; y: number }[] {
   const pts: { x: number; y: number }[] = [];
   const y0 = Math.floor(h * roiTop);
-  const maxRun = Math.max(3, Math.round(w * 0.1));
+  // Near the camera a painted line can be wide in pixels; allow up to 16 % of the width.
+  const maxRun = Math.max(3, Math.round(w * 0.16));
   for (let y = y0; y < h; y++) {
     let x = 0;
     while (x < w) {
@@ -153,11 +201,13 @@ export function findLines(pts: { x: number; y: number }[], w: number, h: number,
 const xAt = (l: LineFit, y: number) => l.a * y + l.b;
 
 export function measureLane(rgba: Uint8ClampedArray, w: number, h: number, opts: LaneOptions): LaneMeasurement {
-  const mask = paintMask(rgba, w, h, opts.roiTop);
+  const mask = paintMask(rgba, w, h, opts.roiTop, opts.color ?? 'white');
   const pts = candidatePoints(mask, w, h, opts.roiTop);
   const lines = findLines(pts, w, h, opts.roiTop);
   const yb = h - 1, cx = (w - 1) / 2;
   const roiRows = h - Math.floor(h * opts.roiTop);
+  const mode = opts.mode ?? 'lanes';
+  if (mode !== 'lanes') return measureSingleLine(lines, pts, w, h, opts, mode);
 
   // Perspective: the left boundary leans right going up (a < 0), the right
   // boundary leans left (a > 0). Allow some tolerance for heading.
@@ -209,7 +259,106 @@ export function measureLane(rgba: Uint8ClampedArray, w: number, h: number, opts:
   const support = (left?.support ?? 0) + (right?.support ?? 0);
   const base = left && right ? 1 : left || right ? 0.55 : 0;
   const confidence = offset === null ? 0 : base * Math.min(1, support / (roiRows * 1.2));
-  return { left, right, offset, heading, widthPx, confidence, points: pts.length, width: w, height: h };
+  const ks = [left, right].filter((l): l is LineFit => !!l).map((l) => curvatureOf(l, pts, h, opts.roiTop)).filter((k): k is number => k !== null);
+  const curvature = ks.length ? ks.reduce((a, b) => a + b, 0) / ks.length : null;
+  const keypoints = {
+    left: left ? followLine(left, pts, h, opts.roiTop) : [],
+    right: right ? followLine(right, pts, h, opts.roiTop) : [],
+  };
+  return { left, right, offset, heading, widthPx, confidence, curvature, keypoints, points: pts.length, width: w, height: h };
+}
+
+/**
+ * Bend ahead from one line: fit its near and far halves separately.
+ * x = a*y + b, so a line curving right further away has a smaller (more
+ * negative) slope in its far half: curvature = a_near - a_far (+ = right).
+ */
+export function curvatureOf(l: LineFit, pts: { x: number; y: number }[], h: number, roiTop: number): number | null {
+  const y0 = Math.floor(h * roiTop), yMid = (y0 + h) / 2;
+  const all = followLine(l, pts, h, roiTop);
+  const near = all.filter((p) => p.y >= yMid);
+  const far = all.filter((p) => p.y < yMid);
+  const nf = fitLine(near), ff = fitLine(far);
+  if (!nf || !ff || near.length < 4 || far.length < 4) return null;
+  return nf.a - ff.a;
+}
+
+/**
+ * Points belonging to one painted line, bottom to top. The near half sticks
+ * to the straight fit; further up it follows the line as it curves away,
+ * re-centring on each row (a curve leaves the straight fit far away).
+ */
+export function followLine(l: LineFit, pts: { x: number; y: number }[], h: number, roiTop: number): { x: number; y: number }[] {
+  const y0 = Math.floor(h * roiTop), yMid = (y0 + h) / 2;
+  const near = pts.filter((p) => p.y >= yMid && Math.abs(p.x - (l.a * p.y + l.b)) < 4);
+  const nf = fitLine(near);
+  if (!nf || near.length < 4) return near;
+  const far: { x: number; y: number }[] = [];
+  let expectA = nf.a, expectB = nf.b;
+  for (let y = Math.floor(yMid) - 1; y >= y0; y--) {
+    const want = expectA * y + expectB;
+    const row = pts.filter((p) => p.y === y && Math.abs(p.x - want) < 6);
+    if (!row.length) continue;
+    const best = row.reduce((a, b) => (Math.abs(a.x - want) < Math.abs(b.x - want) ? a : b));
+    far.push(best);
+    if (far.length >= 3) {
+      const ff = fitLine(far);
+      if (ff) [expectA, expectB] = [ff.a, ff.b];
+    }
+  }
+  return [...near, ...far];
+}
+
+/** 'line' / 'edge' course: one painted line, kept under you or at a set side. */
+function measureSingleLine(
+  lines: LineFit[],
+  pts: { x: number; y: number }[],
+  w: number,
+  h: number,
+  opts: LaneOptions,
+  mode: 'line' | 'edge',
+): LaneMeasurement {
+  const yb = h - 1, cx = (w - 1) / 2;
+  const roiRows = h - Math.floor(h * opts.roiTop);
+  const sideSign = opts.edgeSide === 'right' ? 1 : -1;
+  const target = mode === 'line' ? cx : cx + sideSign * EDGE_TARGET * w;
+  const expect = opts.expectedX ?? target;
+  const pick = (want: number, window: number) => {
+    let b: LineFit | null = null, bd = Infinity;
+    for (const l of lines) {
+      if (Math.abs(l.a) > 2.5) continue;
+      const d = Math.abs(l.a * yb + l.b - want);
+      if (d < bd && d < window) [b, bd] = [l, d];
+    }
+    return b;
+  };
+  // Stay locked on the line we were following; if it's gone from there,
+  // search afresh across most of the view (a line 1.5 m to the side still counts).
+  let best = pick(expect, w * 0.35);
+  if (!best) best = pick(target, w * 1.2);
+  const base = { left: null, right: null, widthPx: null, points: pts.length, width: w, height: h };
+  if (!best) return { ...base, offset: null, heading: null, confidence: 0, curvature: null, keypoints: { left: [], right: [] } };
+  const xb = best.a * yb + best.b;
+  // Runner right of where the line should be -> line appears further left -> +offset.
+  const offset = (target - xb) / (w * 0.5);
+  // Heading: where the line is far ahead vs where perspective alone would put it.
+  const yv = h * 0.3, yt = Math.floor(h * opts.roiTop);
+  const xFar = best.a * yt + best.b;
+  const xFarExpected = cx + (xb - cx) * ((yt - yv) / (yb - yv));
+  const f = w / 2 / Math.tan((65 * Math.PI) / 360);
+  const heading = Math.atan((xFarExpected - xFar) / f);
+  const confidence = Math.min(1, best.support / (roiRows * 0.7));
+  const side = { left: xb < cx ? best : null, right: xb >= cx ? best : null };
+  const kp = followLine(best, pts, h, opts.roiTop);
+  return {
+    ...base,
+    ...side,
+    offset,
+    heading,
+    confidence,
+    curvature: curvatureOf(best, pts, h, opts.roiTop),
+    keypoints: { left: xb < cx ? kp : [], right: xb >= cx ? kp : [] },
+  };
 }
 
 /**
@@ -219,6 +368,11 @@ export function measureLane(rgba: Uint8ClampedArray, w: number, h: number, opts:
 export class LaneTracker {
   offset = 0;
   heading = 0;
+  /** Smoothed curvature of the lines ahead (+ right). */
+  curvature = 0;
+  private bendState: 'left' | 'right' | null = null;
+  /** Bottom-row x of the tracked line (single-line courses), to stay locked on it. */
+  lineX: number | null = null;
   widthPx: number | null = null;
   confidence = 0;
   lastGood = -Infinity;
@@ -227,6 +381,9 @@ export class LaneTracker {
 
   reset(): void {
     this.started = false;
+    this.curvature = 0;
+    this.bendState = null;
+    this.lineX = null;
     this.widthPx = null;
     this.confidence = 0;
     this.lastGood = -Infinity;
@@ -248,9 +405,20 @@ export class LaneTracker {
     this.offset += a * (m.offset - this.offset);
     if (m.heading !== null) this.heading += (this.started ? 0.3 : 1) * (m.heading - this.heading);
     if (m.widthPx) this.widthPx = this.widthPx ? this.widthPx + 0.1 * (m.widthPx - this.widthPx) : m.widthPx;
+    if (m.curvature !== null) this.curvature += 0.3 * (m.curvature - this.curvature);
+    const line = m.left ?? m.right;
+    if (line && !(m.left && m.right)) this.lineX = line.a * (m.height - 1) + line.b;
     this.confidence = this.confidence + 0.4 * (m.confidence - this.confidence);
     this.lastGood = t;
     this.started = true;
+  }
+
+  /** A bend ahead, with hysteresis (enter above 0.25, leave below 0.1). */
+  bend(): 'left' | 'right' | null {
+    const k = this.curvature;
+    if (this.bendState && Math.abs(k) < 0.1) this.bendState = null;
+    else if (!this.bendState && Math.abs(k) > 0.25) this.bendState = k > 0 ? 'right' : 'left';
+    return this.bendState;
   }
 
   lost(t: number, afterMs = 600): boolean {

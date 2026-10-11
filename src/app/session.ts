@@ -5,8 +5,16 @@ import type { Detection, FrameSize } from '../core/types';
 import { CuePolicy, type PolicyOutput } from '../cues/policy';
 import type { DetectionClient } from '../detect/client';
 import { applyEgoMotion, describeScene } from '../perception/egomotion';
-import { focalPx } from '../perception/geometry';
-import { frameQuality, LoomingDetector, toGray, type FrameQuality } from '../perception/imageStats';
+import { effectiveFov, focalPx } from '../perception/geometry';
+import { frameQuality, toGray, type FrameQuality } from '../perception/imageStats';
+import { LgmdDetector, type LgmdOutput } from '../perception/lgmd';
+import { pathDebris, PathEstimator, type PathModel } from '../perception/freespace';
+import { classInfo } from '../perception/classes';
+import { nextGuidance, type GuidanceKey } from '../cues/guidance';
+import { SceneMemory } from '../perception/sceneMemory';
+import type { DepthClient } from '../depth/client';
+import { alignToGround, occupancy, type Occupancy } from '../depth/metric';
+import { effectiveFov as effFov } from '../perception/geometry';
 import { Tracker, type Track } from '../perception/tracker';
 import { filterDetections, zonePan } from '../perception/zones';
 import { QualityGovernor, qualityLadder } from '../perf/governor';
@@ -21,6 +29,12 @@ export interface FrameReport {
   tracks: readonly Track[];
   policy: PolicyOutput;
   looming: boolean;
+  /** Locust-inspired looming pathway output (per sector). */
+  lgmd: LgmdOutput | null;
+  /** Depth-based obstacle picture (virtual cane), when fresh. */
+  depth: Occupancy | null;
+  /** Walkable-path model (for drawing). */
+  path: PathModel | null;
   quality: FrameQuality;
   motion: MotionSnapshot | null;
   stats: ReturnType<Metrics['snapshot']> & { backend: string; where: string; inputWidth: number; model: string };
@@ -42,7 +56,9 @@ const WATCHDOG_MS = 1000;
 const FAIL_REPEAT_MS = 4000;
 const QUALITY_HOLD_MS = 2000;
 const QUALITY_REPEAT_MS = 20000;
-const THUMB_W = 64;
+/** One small frame per camera frame feeds the looming, path and light checks. */
+const THUMB_W = 80;
+const GUIDE_SPEECH_GAP_MS = 4000;
 const HEARTBEAT_MS = 6000;
 const TILT_HOLD_MS = 3000;
 const TILT_REPEAT_MS = 30000;
@@ -71,7 +87,24 @@ export class Session {
   private tracker = new Tracker();
   private policy = new CuePolicy();
   private warnings = new WarningPolicy();
-  private looming = new LoomingDetector();
+  private lgmd = new LgmdDetector();
+  private scene = new SceneMemory();
+  /** Depth AI (virtual cane + echolocation); set by the app when available. */
+  depthClient: DepthClient | null = null;
+  private depthCanvas: OffscreenCanvas | HTMLCanvasElement =
+    typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(196, 252) : document.createElement('canvas');
+  private depthState: { occ: Occupancy; at: number } | null = null;
+  private lastDepthAt = -Infinity;
+  private lastEcho = 0;
+  private lastHeadSaid = -Infinity;
+  private depthQuality = 0;
+  private hazardFrames = 0;
+  private caneFrames = 0;
+  private lastHazardCue = -Infinity;
+  private lastHazardSaid = -Infinity;
+  private pathEst = new PathEstimator();
+  private lastGuideSaid: GuidanceKey = null;
+  private lastGuideSpeech = -Infinity;
   private governor: QualityGovernor;
   private grab: OffscreenCanvas | HTMLCanvasElement;
   private thumb: HTMLCanvasElement;
@@ -149,7 +182,9 @@ export class Session {
     this.tracker.reset();
     this.policy.reset();
     this.warnings.reset();
-    this.looming.reset();
+    this.lgmd.reset();
+    this.pathEst.reset();
+    this.scene.reset();
     this.startedAt = performance.now();
     this.lastFrameDone = performance.now();
     this.state = 'running';
@@ -165,7 +200,9 @@ export class Session {
     this.attach(source);
     this.tracker.reset();
     this.policy.reset();
-    this.looming.reset();
+    this.lgmd.reset();
+    this.pathEst.reset();
+    this.scene.reset();
     this.lastFrameDone = performance.now();
   }
 
@@ -179,6 +216,7 @@ export class Session {
     this.loopToken++;
     clearInterval(this.watchdog);
     this.audio.silence();
+    this.audio.setCane({ active: false, distance: 9, azimuth: 0, head: false });
     this.source?.stop();
     this.source = null;
     this.logSystem('stop');
@@ -189,6 +227,7 @@ export class Session {
     this.state = 'paused';
     this.loopToken++;
     this.audio.silence();
+    this.audio.setCane({ active: false, distance: 9, azimuth: 0, head: false });
     this.announcer.cancel();
     this.logSystem('pause');
   }
@@ -210,7 +249,9 @@ export class Session {
       this.governor.reset(qualityLadder(s.model));
       void this.ensureModel().catch((e) => this.fail(`Could not load the detection model. ${e}`));
     }
-    if (!s.looming) this.looming.reset();
+    if (!s.looming) this.lgmd.reset();
+    this.pathEst.reset();
+    this.scene.reset();
   }
 
   /** Fail loudly: warning earcon + spoken reason, rate-limited. */
@@ -294,18 +335,25 @@ export class Session {
     const bitmap =
       this.grab instanceof HTMLCanvasElement ? await createImageBitmap(this.grab) : this.grab.transferToImageBitmap();
 
-    // Thumbnail for light/blur and looming checks (cheap: 64 px wide).
+    // Small thumbnail (80 px wide), same left/right orientation as detections.
     this.frameCount++;
-    let looming = false;
-    if (s.looming || this.frameCount % 10 === 0) {
-      const tw = THUMB_W, th = Math.max(1, Math.round((THUMB_W * vh) / vw));
+    const tw = THUMB_W, th = Math.max(1, Math.round((THUMB_W * vh) / vw));
+    if (this.thumb.width !== tw || this.thumb.height !== th) {
       this.thumb.width = tw;
       this.thumb.height = th;
-      const tc = this.thumb.getContext('2d', { willReadFrequently: true })!;
-      tc.drawImage(video, 0, 0, tw, th);
-      const gray = toGray(tc.getImageData(0, 0, tw, th).data, tw, th);
-      if (this.frameCount % 10 === 0) this.updateQuality(frameQuality(gray), captureT);
-      if (s.looming) looming = this.looming.update(gray, captureT);
+    }
+    const tc = this.thumb.getContext('2d', { willReadFrequently: true })!;
+    tc.setTransform(this.mirror ? -1 : 1, 0, 0, 1, this.mirror ? tw : 0, 0);
+    tc.drawImage(video, 0, 0, tw, th);
+    const thumbPx = tc.getImageData(0, 0, tw, th).data;
+    const gray = toGray(thumbPx, tw, th);
+    if (this.frameCount % 10 === 0) this.updateQuality(frameQuality(gray), captureT);
+    // Locust-inspired looming pathway: harder to trigger while walking (the
+    // whole scene expands as you move forward).
+    let lgmd: LgmdOutput | null = null;
+    if (s.looming) {
+      const walking = this.motion?.available && this.motion.snapshot().walking;
+      lgmd = this.lgmd.update(gray, walking ? 1.3 : 1);
     }
 
     // --- Inference (worker) ---------------------------------------------------
@@ -327,10 +375,21 @@ export class Session {
     });
     const tracks = this.tracker.update(kept, captureT, {
       frame,
-      focal: focalPx(frame, s.fovDeg),
+      focal: focalPx(frame, effectiveFov(s.fovDeg, this.source?.zoom)),
       corridorWidth: s.corridorWidth,
       centerWidth: s.centerWidth,
     });
+    // Depth AI (virtual cane): ~5 times a second, in its own worker.
+    if ((s.depthCane || s.echoEverySec > 0) && this.depthClient?.ready && !this.depthClient.busy && captureT - this.lastDepthAt > 200) {
+      this.lastDepthAt = captureT;
+      void this.runDepth(video, s);
+    }
+    const depth = this.depthState && captureT - this.depthState.at < 700 ? this.depthState.occ : null;
+
+    // Walkable path, with detected objects masked out of it.
+    // Mask live detections AND tracked objects (a just-vanished detection must
+    // not make its spot look like open path for the half-second it coasts).
+    const path = this.pathEst.update(thumbPx, tw, th, [...detections.map((d) => d.box), ...tracks.map((t) => t.box)]);
     const motion = this.motion?.available ? this.motion.snapshot() : null;
     if (motion) {
       applyEgoMotion(tracks, motion.walking, motion.speed);
@@ -340,12 +399,38 @@ export class Session {
     const policy = this.policy.update(
       tracks,
       captureT,
-      { centerWidth: s.centerWidth, blockDistance: s.blockDistance, maxSources: 3, density: s.cueDensity },
-      looming,
+      {
+        centerWidth: s.centerWidth,
+        blockDistance: s.blockDistance,
+        maxSources: 3,
+        density: s.cueDensity,
+        focalNorm: focalPx(frame, effectiveFov(s.fovDeg, this.source?.zoom)) / frame.width,
+      },
+      // Depth fusion: something close and solid straight ahead that no
+      // recognised object explains (a wall, a pole, an open door) blocks
+      // the path too.
+      {
+        path,
+        lgmd,
+        depthObstacle: depth?.center && depth.center.z < s.blockDistance ? depth.center : null,
+        loomingCenter:
+          !!depth?.center &&
+          depth.center.z < s.blockDistance &&
+          !tracks.some((t) => t.confirmed && t.zone === 'center' && Math.abs(t.distance - depth.center!.z) < 1),
+      },
     );
+    this.updateCane(depth, s, captureT);
+    this.checkGround(depth, path, captureT);
+    this.speakGuidance(policy, tracks, captureT);
+    const looming = policy.unexplainedLooming !== null;
 
     // --- Audio ----------------------------------------------------------------
     const started = this.audio.update(policy.sources);
+    // "8D" surround: the whole scene, continuously, all the way round you.
+    if (s.soundScene === 'surround') {
+      const yaw = this.motion?.available ? this.motion.yaw : 0;
+      this.audio.updateScene(this.scene.update(tracks, captureT, yaw, s.spatialSpread));
+    }
     const now = performance.now();
     // Heartbeat: a barely-audible tick when nothing has sounded for a while,
     // so the wearer can tell "nothing detected" from "app stopped".
@@ -422,6 +507,9 @@ export class Session {
       tracks,
       policy,
       looming,
+      lgmd,
+      depth,
+      path,
       quality: this.quality,
       motion,
       stats: {
@@ -462,6 +550,122 @@ export class Session {
       );
       this.logSystem(`camera tilted ${bad} (${Math.round(elevation)} degrees)`);
     }
+  }
+
+  /**
+   * Spoken guidance around blockages (see cues/guidance.ts): stop, which way
+   * to step, and, once it clears, how to move again. Rate-limited, except that
+   * "you can move again" messages are never held back for long.
+   */
+  private speakGuidance(p: PolicyOutput, tracks: readonly Track[], now: number): void {
+    const blocker = tracks
+      .filter((t) => t.confirmed && t.zone === 'center')
+      .sort((a, b) => a.distance - b.distance)[0];
+    const what = blocker ? (classInfo(blocker.label)?.spoken ?? 'Something') : 'Something';
+    const g = nextGuidance(this.lastGuideSaid, p, what);
+    if (!g.text) {
+      this.lastGuideSaid = g.key;
+      return;
+    }
+    const gap = g.resume ? 1000 : GUIDE_SPEECH_GAP_MS;
+    if (now - this.lastGuideSpeech < gap) return; // try again next frame
+    this.lastGuideSaid = g.key;
+    this.lastGuideSpeech = now;
+    if (g.resume) this.audio.earcon('opened');
+    if (this.settings.verbosity !== 'off') this.announcer.say(g.text, { system: false, priority: 0 });
+    this.log.push({ t: Math.round(now - this.startedAt), type: 'speech', text: g.text });
+  }
+
+  /** Depth frame -> metric alignment (via the ground) -> occupancy. */
+  private async runDepth(video: HTMLVideoElement, s: Settings): Promise<void> {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const sc = 252 / Math.max(vw, vh);
+    const w = Math.round(vw * sc), h = Math.round(vh * sc);
+    this.depthCanvas.width = w;
+    this.depthCanvas.height = h;
+    const g = this.depthCanvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+    g.setTransform(this.mirror ? -1 : 1, 0, 0, 1, this.mirror ? w : 0, 0);
+    g.drawImage(video, 0, 0, w, h);
+    const bmp =
+      this.depthCanvas instanceof HTMLCanvasElement
+        ? await createImageBitmap(this.depthCanvas)
+        : this.depthCanvas.transferToImageBitmap();
+    const dm = await this.depthClient!.estimate(bmp);
+    if (!dm || this.state !== 'running') return;
+    const elev = this.motion?.available ? this.motion.snapshot().elevation : NaN;
+    const table = s.mount === 'table';
+    const cam = {
+      width: dm.width,
+      height: dm.height,
+      fovDeg: effFov(s.fovDeg, this.source?.zoom),
+      pitch: Number.isFinite(elev) ? Math.min(1.3, Math.max(0.02, (-elev * Math.PI) / 180)) : table ? 0.05 : 0.35,
+      mountHeight: table ? 0.75 : s.mount === 'waist' ? 1.0 : 1.3,
+    };
+    const al = alignToGround(dm, cam);
+    this.depthQuality = al?.quality ?? 0;
+    // No visible ground (e.g. a laptop webcam looking straight ahead): can't measure in metres.
+    if (!al || al.quality < 0.35) {
+      this.depthState = null;
+      return;
+    }
+    this.depthState = { occ: occupancy(dm, cam, al), at: performance.now() };
+  }
+
+  /** Virtual cane tone, head-height warnings and echolocation clicks. */
+  private updateCane(depth: Occupancy | null, s: Settings, now: number): void {
+    const near = depth?.center ?? null;
+    const head = depth?.head ?? null;
+    const target = head && (!near || head.z <= near.z + 0.3) ? head : near;
+    // Only once it persists (3 frames) and is within 2.5 m: no chatter from noise.
+    this.caneFrames = target && target.z < 2.5 ? this.caneFrames + 1 : 0;
+    if (s.depthCane && target && this.caneFrames >= 3) {
+      this.audio.setCane({ active: true, distance: target.z, azimuth: Math.atan2(target.x, target.z), head: target === head });
+      if (head && head.z < 2.5 && now - this.lastHeadSaid > 6000) {
+        this.lastHeadSaid = now;
+        if (this.settings.verbosity !== 'off')
+          this.announcer.say(`Head height obstacle ahead, ${Math.max(1, Math.round(head.z))} metres.`, { system: false, priority: 0 });
+      }
+    } else {
+      this.audio.setCane({ active: false, distance: 9, azimuth: 0, head: false });
+    }
+    if (s.echoEverySec > 0 && depth && now - this.lastEcho > s.echoEverySec * 1000) {
+      this.lastEcho = now;
+      this.audio.echolocate(depth.echoes);
+    }
+  }
+
+  /**
+   * Rocks, kerbs and steps (depth: low bumps in your path) and flat debris
+   * like leaves or litter (path appearance). Must persist ~5 frames; a low
+   * tock on the ground at its direction, and a short spoken note at most
+   * every 12 s (through the speech limiter).
+   */
+  private checkGround(depth: Occupancy | null, path: PathModel, now: number): void {
+    const rock = depth?.low ?? null;
+    const debris = rock ? null : pathDebris(path);
+    if (!rock && !debris) {
+      this.hazardFrames = 0;
+      return;
+    }
+    if (++this.hazardFrames < 5) return;
+    const az = rock ? Math.atan2(rock.x, rock.z) : (debris!.x - 0.5) * 1.1;
+    if (now - this.lastHazardCue > 2500) {
+      this.lastHazardCue = now;
+      this.audio.groundCue(az);
+    }
+    if (now - this.lastHazardSaid > 12000 && this.settings.verbosity !== 'off') {
+      this.lastHazardSaid = now;
+      const side = Math.abs(az) < 0.15 ? 'ahead' : az < 0 ? 'ahead on the left' : 'ahead on the right';
+      this.announcer.say(
+        rock ? `Step or rock ${side}, about ${Math.max(1, Math.round(rock.z))} metres.` : `Something on the ground ${side}.`,
+        { system: false, priority: 1 },
+      );
+    }
+  }
+
+  /** How well depth lined up with the ground last time (0..1); low = no metric depth. */
+  get depthOk(): number {
+    return this.depthQuality;
   }
 
   /** Low-light / blur warning: tell the user when the camera can't see well. */

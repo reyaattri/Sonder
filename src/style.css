@@ -709,3 +709,151 @@ input[type='number'] {
     grid-row: 4;
   }
 }
+
+/* ------------------------------------------------------------- simulator */
+.sim {
+  display: grid;
+  gap: 8px;
+}
+.sim[hidden] {
+  display: none;
+}
+/* Portrait camera view: width follows the height cap so it never collapses. */
+.sim-view {
+  width: min(100%, calc(42dvh * 0.75));
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 2px solid var(--line);
+  background: #000;
+  aspect-ratio: 3 / 4;
+  margin: 0 auto;
+}
+.sim-view canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.sim-controls {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  gap: 8px;
+}
+.sim-controls select {
+  min-height: 56px;
+}
+#sim-auto[aria-pressed='true'],
+#wsim-auto[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.sim-truth {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-align: center;
+  white-space: pre-line;
+}
+.simulating #track-controls {
+  display: grid;
+}
+@media (min-width: 900px) {
+  .track .sim {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .simulating .stage {
+    grid-row: 3 / 5;
+    min-height: 40dvh;
+  }
+}
+
+.bt-help {
+  margin-top: 10px;
+  font-size: 0.95rem;
+}
+.bt-help summary {
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.bt-help ol {
+  margin: 6px 0 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 6px;
+}
+
+/* ------------------------------------------------------------- voice menu */
+.screen.voice {
+  min-height: 100dvh;
+}
+.voice-top {
+  display: flex;
+  justify-content: flex-end;
+}
+.linkish {
+  width: auto;
+  min-height: 48px;
+  padding: 8px 14px;
+  font-size: 0.95rem;
+  background: transparent;
+}
+.voice-options {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.voice-options li {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+.voice-options li[data-hi] {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--on-accent);
+}
+.voice-target {
+  flex: 1;
+  min-height: 34dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 1.6rem;
+  font-weight: 800;
+  border-width: 3px;
+  border-style: dashed;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.voice-gestures {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Live view: same panel as the simulator, without the sim controls. */
+.sim.live .sim-controls,
+.sim.live:not(.real) .sim-truth {
+  display: none;
+}
+.sim-view video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

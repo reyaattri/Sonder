@@ -40,9 +40,9 @@ export function personPulse(ctx: BaseAudioContext, dest: AudioNode, t: number, p
   for (const [i, f] of [f1, f2].entries()) {
     const start = t + i * gap;
     const decay = Math.min(0.22, p.period * 0.6);
-    osc(ctx, 'sine', f, env(ctx, dest, start, 0.5, soft ? 0.01 : 0.003, decay), start, decay);
+    osc(ctx, 'sine', f, env(ctx, dest, start, 0.5, soft ? 0.02 : 0.012, decay), start, decay);
     // Marimba "bar" overtone at 4x, decaying faster.
-    if (!soft) osc(ctx, 'sine', f * 4, env(ctx, dest, start, 0.12, 0.002, 0.05), start, 0.06);
+    if (!soft) osc(ctx, 'sine', f * 4, env(ctx, dest, start, 0.08, 0.01, 0.05), start, 0.06);
   }
 }
 
@@ -75,7 +75,7 @@ export function vehiclePulse(ctx: BaseAudioContext, dest: AudioNode, t: number, 
 export function staticPulse(ctx: BaseAudioContext, dest: AudioNode, t: number, p: PulseParams, noise: AudioBuffer): void {
   const pitch = 1 + 0.4 * p.urgency;
   const soft = p.style === 'soft';
-  const body = env(ctx, dest, t, 0.7, 0.001, 0.07);
+  const body = env(ctx, dest, t, 0.6, 0.008, 0.08);
   const o = osc(ctx, 'sine', (soft ? 500 : 720) * pitch, body, t, 0.08);
   o.frequency.exponentialRampToValueAtTime((soft ? 330 : 430) * pitch, t + 0.04);
   if (soft) return;
@@ -85,9 +85,32 @@ export function staticPulse(ctx: BaseAudioContext, dest: AudioNode, t: number, p
   bp.type = 'bandpass';
   bp.frequency.value = 1900;
   bp.Q.value = 3;
-  n.connect(bp).connect(env(ctx, dest, t, 0.5, 0.0005, 0.02));
+  n.connect(bp).connect(env(ctx, dest, t, 0.3, 0.004, 0.025));
   n.start(t);
   n.stop(t + 0.04);
+}
+
+/**
+ * Looming (unrecognised object rushing at you): a rising noise "whoosh",
+ * unlike any object timbre, so it means "something is coming, I don't know what".
+ */
+export function loomPulse(ctx: BaseAudioContext, dest: AudioNode, t: number, p: PulseParams, noise: AudioBuffer): void {
+  const dur = Math.min(0.32, p.period * 0.8);
+  const n = ctx.createBufferSource();
+  n.buffer = noise;
+  n.loop = true;
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.Q.value = 2.5;
+  bp.frequency.setValueAtTime(500, t);
+  bp.frequency.exponentialRampToValueAtTime(3500, t + dur);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.8 + 0.4 * p.urgency, t + dur * 0.85);
+  g.gain.linearRampToValueAtTime(0, t + dur);
+  n.connect(bp).connect(g).connect(dest);
+  n.start(t);
+  n.stop(t + dur + 0.02);
 }
 
 /** Go-this-way guide: gentle rising tone. */
@@ -159,7 +182,10 @@ export type EarconName =
   | 'approach'
   | 'tick'
   | 'recovered'
-  | 'lineLost';
+  | 'lineLost'
+  | 'opened'
+  | 'stopCue'
+  | 'bend';
 
 /** Distinct short system sounds, always centered. */
 export function earcon(ctx: BaseAudioContext, dest: AudioNode, name: EarconName, t: number): number {
@@ -181,6 +207,12 @@ export function earcon(ctx: BaseAudioContext, dest: AudioNode, name: EarconName,
     recovered: ['sine', [880, 1175], 0.06, 0.25],
     // Track mode: lane lines not visible.
     lineLost: ['triangle', [330, 330], 0.16, 0.45],
+    // The blockage is gone: you can move again (gentle, rising, open).
+    opened: ['sine', [523, 659, 880], 0.11, 0.4],
+    // Track: STOP (Project Guideline-style): unmistakable, falling, repeated.
+    stopCue: ['square', [880, 587, 392, 880, 587, 392], 0.11, 0.4],
+    // Track: a bend is coming (soft two-note glide).
+    bend: ['triangle', [587, 698], 0.09, 0.3],
   };
   const [type, freqs, gap, peak] = notes[name];
   freqs.forEach((f, i) => {

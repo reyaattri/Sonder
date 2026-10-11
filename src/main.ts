@@ -1,7 +1,8 @@
 import './style.css';
 import { Session, type FrameReport } from './app/session';
-import { AudioEngine } from './audio/engine';
-import { CameraError, CameraSource, FileSource, listCameras, shouldMirror, WakeLock, type FrameSource } from './camera/source';
+import { AudioEngine, classifyOutput } from './audio/engine';
+import { DepthClient } from './depth/client';
+import { CameraError, CameraSource, FileSource, ImageSource, listCameras, shouldMirror, WakeLock, type FrameSource } from './camera/source';
 import { DEFAULT_SETTINGS, isWorn, loadSettings, saveSettings, type Activity, type Mount, type Settings } from './core/settings';
 import { DetectionClient } from './detect/client';
 import { MODELS } from './detect/detector';
@@ -13,6 +14,11 @@ import { HeartRateMonitor, RunTracker } from './track/devices';
 import { formatDuration, formatPace } from './track/run';
 import { TrackSession, type TrackReport } from './track/trackSession';
 import { drawLaneGauge, drawLaneOverlay } from './ui/laneGauge';
+import { TrackSimulator } from './sim/simulator';
+import { WalkSimulator } from './sim/walkSim';
+import { PgSegClient } from './track/pgSegClient';
+import { Listener } from './voice/listener';
+import { VoiceMenu, type MenuStep } from './voice/menu';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const BASE = new URL(import.meta.env.BASE_URL, location.href).href;
@@ -27,9 +33,20 @@ const hr = new HeartRateMonitor();
 const runTracker = new RunTracker(motion, hr);
 // Track mode's "runner ahead" detector: fast model on the CPU, so the GPU stays free for 60 fps lane guidance.
 const trackDetector = new DetectionClient(BASE, false);
-const track = new TrackSession(audio, announcer, trackDetector, runTracker, () => settings);
+/** Settings in effect for track mode (simulator overrides applied). */
+const eff = (): Settings => (simOverrides ? { ...settings, ...simOverrides } : settings);
+/** While simulating, the course settings follow the simulated course. */
+let simOverrides: Partial<Settings> | null = null;
+let sim: TrackSimulator | null = null;
+let wsim: WalkSimulator | null = null;
+const track = new TrackSession(audio, announcer, trackDetector, runTracker, () => (simOverrides ? { ...settings, ...simOverrides } : settings), motion);
 const tvideo = $<HTMLVideoElement>('tvideo');
+/** Google Project Guideline's segmentation model, for purple guide-line courses. */
+const pgSeg = new PgSegClient(BASE);
 const wakeLock = new WakeLock();
+/** Depth AI for the virtual cane and echolocation (GPU when available). */
+const depthClient = new DepthClient(BASE, true);
+session.depthClient = depthClient;
 const video = $<HTMLVideoElement>('video');
 const overlay = $<HTMLCanvasElement>('overlay');
 const radar = $<HTMLCanvasElement>('radar');
@@ -43,7 +60,7 @@ let lastReport: FrameReport | null = null;
 // ---------------------------------------------------------------------------
 // Screens
 // ---------------------------------------------------------------------------
-type ScreenId = 'welcome' | 'disclaimer' | 'sound' | 'headphones' | 'status' | 'running' | 'track';
+type ScreenId = 'voice' | 'welcome' | 'disclaimer' | 'sound' | 'headphones' | 'status' | 'running' | 'track';
 let current: ScreenId = 'welcome';
 
 function show(id: ScreenId): void {
@@ -206,6 +223,8 @@ $('btn-start').addEventListener('click', async () => {
   await audio.unlock().catch(() => {});
   announcer.unlock();
   void preloadModel().catch(() => {});
+  if (settings.activity === 'walk' && (settings.depthCane || settings.echoEverySec > 0))
+    void depthClient.load().catch((e) => console.warn('[EchoPath] depth unavailable:', e));
   if (!settings.disclaimerAccepted) {
     show('disclaimer');
     readDisclaimer();
@@ -246,13 +265,17 @@ function preloadModel(): Promise<void> {
   return modelLoading;
 }
 
-async function startRunning(): Promise<void> {
-  const usingFile = testVideo !== null;
+async function startRunning(simSource?: FrameSource): Promise<void> {
+  const usingFile = testVideo !== null && !simSource;
   status('Starting', usingFile ? 'Loading the test video.' : 'Your browser will ask to use the camera. Choose Allow.', {
     busy: true,
   });
-  if (!usingFile) announcer.say('Your browser will ask to use the camera. Choose Allow.');
-  const source: FrameSource = usingFile ? new FileSource(video, testVideo!) : new CameraSource(video, settings.cameraId);
+  if (!usingFile && !simSource) announcer.say('Your browser will ask to use the camera. Choose Allow.');
+  const source: FrameSource = simSource
+    ? simSource
+    : usingFile
+    ? new FileSource(video, testVideo!)
+    : new CameraSource(video, settings.cameraId, 30, settings.wideAngle);
   try {
     await source.start();
   } catch (e) {
@@ -282,6 +305,8 @@ async function startRunning(): Promise<void> {
   }
 
   await wakeLock.acquire();
+  if (classifyOutput(await outputLabel()) === 'speakers')
+    announcer.say('Sound is playing through the laptop speakers, not headphones. Connect your headphones for direction.');
   setPaused(false);
   applyMountUi();
   show('running');
@@ -302,7 +327,7 @@ function updateMirror(): void {
 
 async function switchCamera(deviceId: string): Promise<void> {
   if (session.state === 'idle' || testVideo) return;
-  const src = new CameraSource(video, deviceId);
+  const src = new CameraSource(video, deviceId, 30, settings.wideAngle);
   try {
     session.currentSource?.stop();
     await src.start();
@@ -353,13 +378,23 @@ async function outputLabel(): Promise<string> {
   }
 }
 
+/** Bigger audio buffers on Bluetooth stop crackle and dropouts (Settings -> Audio buffer). */
+async function applyLatencyMode(kind: ReturnType<typeof classifyOutput>): Promise<void> {
+  const mode =
+    settings.latencyMode === 'auto' ? (kind === 'bt-stereo' || kind === 'bt-handsfree' ? 'balanced' : 'interactive') : settings.latencyMode;
+  await audio.setLatencyMode(mode).catch(() => {});
+}
+
 async function refreshSound(): Promise<void> {
   await audio.unlock().catch(() => {});
   const label = await outputLabel();
   const ch = audio.outputChannels;
   const delay = audio.outputLatencyMs;
-  const handsFree = /hands-?free|headset|communication/i.test(label);
-  setCheck('out-device', handsFree ? 'warn' : 'ok', label);
+  const kind = classifyOutput(label);
+  const handsFree = kind === 'bt-handsfree';
+  const speakers = kind === 'speakers';
+  setCheck('out-device', handsFree || speakers ? 'bad' : 'ok', label + (speakers ? ' (laptop speakers, not headphones)' : ''));
+  await applyLatencyMode(kind);
   setCheck('out-stereo', ch >= 2 ? 'ok' : 'bad', ch >= 2 ? `Yes (${ch} channels)` : 'No, mono');
   setCheck(
     'out-delay',
@@ -367,7 +402,11 @@ async function refreshSound(): Promise<void> {
     delay > 0 ? `about ${Math.round(delay)} ms${delay > 120 ? ' (Bluetooth: cues arrive a bit late)' : ''}` : 'Not reported',
   );
   const problem = $('out-problem');
-  if (ch < 2 || handsFree) {
+  if (speakers) {
+    problem.hidden = false;
+    problem.innerHTML =
+      '<strong>Sound is going to the laptop speakers.</strong> Your Bluetooth headphones are not connected for audio. Open the fix steps below, connect them, then press Reconnect sound.';
+  } else if (ch < 2 || handsFree) {
     problem.hidden = false;
     problem.innerHTML =
       '<strong>Left and right will not work on this output.</strong> ' +
@@ -400,7 +439,7 @@ document.querySelector('#screen-sound .row3')!.addEventListener('click', async (
   if (!tone) return;
   await audio.unlock().catch(() => {});
   if (tone === 'sweep') {
-    announcer.showText('The sound moves from your left, to ahead, to your right, and back.');
+    announcer.showText('The sound circles all the way around you: ahead, right, behind, left.');
     await audio.spatialTest(4);
   } else {
     await audio.testTone(tone as 'left' | 'right');
@@ -605,13 +644,157 @@ function setPaused(p: boolean): void {
 
 $('btn-stop').addEventListener('click', () => {
   session.stop();
+  stopWalkSimulator();
   wakeLock.release();
   stopMediaSession();
   clearOverlay(overlay);
   lastReport = null;
   audio.earcon('stop');
   announcer.say('EchoPath stopped.');
-  show('welcome');
+  returnHome();
+});
+
+let lastWsimText = 0;
+
+/** Practice / demo: the real WALK pipeline on a simulated park path with poles, bins and people. */
+async function startWalkSimulator(): Promise<void> {
+  await audio.unlock().catch(() => {});
+  announcer.unlock();
+  motion.stop(); // the simulator provides motion
+  wsim = new WalkSimulator(motion);
+  simOverrides = { mount: 'chest', cameraFacing: 'same', fovDeg: 65, depthCane: true };
+  session.applySettings(eff());
+  void depthClient.load().catch((e) => console.warn('[EchoPath] depth unavailable:', e));
+  $('wsim-view').prepend(wsim.canvas);
+  $('wsim-panel').hidden = false;
+  $('screen-running').classList.add('simulating');
+  await startRunning(wsim.source());
+  if (wsim) wsim.frozen = session.state !== 'running';
+  announcer.showText('Walk simulator running. The autopilot walker is blind: it only stops or steps aside when EchoPath tells it to.');
+}
+
+function stopWalkSimulator(): void {
+  if (!wsim) return;
+  wsim.stop();
+  wsim.canvas.remove();
+  wsim = null;
+  simOverrides = null;
+  session.applySettings(settings);
+  $('wsim-panel').hidden = true;
+  $('screen-running').classList.remove('simulating');
+  if (settings.mount !== 'table') void motion.start();
+}
+
+type Scene = 'walk' | 'stadium' | 'road' | 'purple' | 'pg-photo' | 'video-walk' | 'video-run';
+
+/** One dropdown for every practice scene: simulations and real footage. */
+async function startScene(scene: Scene): Promise<void> {
+  if (scene === 'walk') return startWalkSimulator();
+  if (scene === 'stadium' || scene === 'road' || scene === 'purple') return startSimulator(scene);
+  if (scene === 'pg-photo') return startRealPhoto();
+  // Real video: pick the file, then run it through the walk or track pipeline.
+  const input = $<HTMLInputElement>('practice-file');
+  input.value = '';
+  input.onchange = () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    testVideo = f;
+    if (scene === 'video-walk') void startRunning();
+    else void startTrack();
+  };
+  input.click();
+}
+
+$('btn-practice').addEventListener('click', () => void startScene($<HTMLSelectElement>('practice-scene').value as Scene));
+$<HTMLSelectElement>('wsim-scene').addEventListener('change', (e) => {
+  const v = (e.target as HTMLSelectElement).value as Scene;
+  if (v === 'walk' || !wsim) return;
+  $('btn-stop').click();
+  void startSimulator(v as 'stadium' | 'road' | 'purple');
+});
+
+/** Google's real-world truth for the Project Guideline photo: which pixels are the line. */
+let golden: { w: number; h: number; on: Uint8Array } | null = null;
+let realPhoto = false;
+
+async function loadGolden(): Promise<void> {
+  const img = new Image();
+  img.src = `${BASE}samples/pg/guideline1_mask_golden.png`;
+  await img.decode();
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
+  g.drawImage(img, 0, 0);
+  const px = g.getImageData(0, 0, c.width, c.height).data;
+  const on = new Uint8Array(c.width * c.height);
+  for (let i = 0; i < on.length; i++) on[i] = px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2] > 300 ? 1 : 0;
+  golden = { w: c.width, h: c.height, on };
+}
+
+/**
+ * Score Google's model output (keypoints) against Google's own hand-labelled
+ * line: how many keypoints land on the real line, how much of the line is
+ * found, and the mean horizontal miss in pixels.
+ */
+function goldenScore(kps: { x: number; y: number }[]): { precision: number; recall: number; errPx: number } | null {
+  if (!golden || !kps.length) return null;
+  const { w, h, on } = golden;
+  const centre = (y: number) => {
+    let s = 0, n = 0;
+    for (let x = 0; x < w; x++) if (on[y * w + x]) (s += x), n++;
+    return n ? s / n : null;
+  };
+  let hit = 0, err = 0, errN = 0;
+  for (const k of kps) {
+    const y = Math.min(h - 1, Math.round(k.y * h)), c = centre(y);
+    if (c === null) continue;
+    const d = Math.abs(k.x * w - c);
+    if (d < 12) hit++;
+    err += d;
+    errN++;
+  }
+  const bands = 12;
+  let lineBands = 0, found = 0;
+  for (let b = 0; b < bands; b++) {
+    const y0 = Math.floor((b * h) / bands), y1 = Math.floor(((b + 1) * h) / bands);
+    let has = false;
+    for (let y = y0; y < y1 && !has; y += 2) has = centre(y) !== null;
+    if (!has) continue;
+    lineBands++;
+    if (kps.some((k) => k.y * h >= y0 && k.y * h < y1)) found++;
+  }
+  return { precision: hit / kps.length, recall: lineBands ? found / lineBands : 0, errPx: errN ? err / errN : 0 };
+}
+
+/** Real-world check: Google's real photo through the real track pipeline and Google's model. */
+async function startRealPhoto(): Promise<void> {
+  await audio.unlock().catch(() => {});
+  announcer.unlock();
+  realPhoto = true;
+  simOverrides = { trackCourse: 'line', lineColor: 'purple', mountHeight: 1.0, cameraFacing: 'same', trackCountdown: false };
+  void loadGolden().catch((e) => console.warn('[EchoPath] golden mask:', e));
+  $('sim-panel').classList.add('real');
+  await startTrack(new ImageSource(tvideo, `${BASE}samples/pg/guideline1.png`), true);
+  announcer.showText("Real-world check: Google Project Guideline's own test photo, a real path with their purple line and fallen leaves. Scored against Google's hand-labelled line.");
+}
+for (const [id, key] of [
+  ['wsim-left', 'left'],
+  ['wsim-right', 'right'],
+] as const) {
+  const el = $(id);
+  const set = (v: boolean) => () => wsim && (wsim.input[key] = v);
+  el.addEventListener('pointerdown', set(true));
+  el.addEventListener('pointerup', set(false));
+  el.addEventListener('pointerleave', set(false));
+  el.addEventListener('pointercancel', set(false));
+}
+$('wsim-auto').addEventListener('click', (e) => {
+  if (!wsim) return;
+  wsim.autopilot = !wsim.autopilot;
+  const b = e.currentTarget as HTMLButtonElement;
+  b.setAttribute('aria-pressed', String(wsim.autopilot));
+  b.textContent = `Autopilot: ${wsim.autopilot ? 'on' : 'off'}`;
 });
 
 function setChip(id: string, state: CheckState, text: string): void {
@@ -623,6 +806,22 @@ function setChip(id: string, state: CheckState, text: string): void {
 let lastChipUpdate = 0;
 session.onFrame = (r) => {
   lastReport = r;
+  if (wsim) {
+    wsim.guidance = { blocked: r.policy.blocked, side: r.policy.guideSide, noWay: r.policy.noWayAround, caneM: r.depth?.center && r.depth.center.z < 2.5 ? r.depth.center.z : null };
+    drawOverlay($<HTMLCanvasElement>('wsim-overlay'), wsim.video, r, settings.centerWidth, settings.corridorWidth);
+    if (performance.now() - lastWsimText > 300) {
+      lastWsimText = performance.now();
+      const t = wsim.aheadTruth(), sc = wsim.score;
+      const heard = r.policy.blocked
+        ? r.policy.noWayAround || !r.policy.guideSide ? 'STOP' : `step ${r.policy.guideSide}`
+        : r.depth?.center && r.depth.center.z < 2.5 ? `cane: ${r.depth.center.z.toFixed(1)} m` : 'clear';
+      const bump = wsim.lastBump && performance.now() - wsim.lastBump.at < 2500 ? ` · BUMPED: ${wsim.lastBump.what}` : '';
+      $('wsim-truth').textContent =
+        `Truth: ${t ? `${t.what} ${t.distance.toFixed(1)} m${Math.abs(t.side) > 0.15 ? (t.side > 0 ? ' right' : ' left') : ' ahead'}` : 'path clear'} · EchoPath: ${heard}${bump}
+` +
+        `${Math.round(sc.metres)} m · in the way ${sc.inWay}, avoided ${sc.cleared} · bumps ${sc.bumps} (head ${sc.headBumps}) · helped ${sc.assists}`;
+    }
+  }
   if (settings.debugOverlay) drawOverlay(overlay, video, r, settings.centerWidth, settings.corridorWidth);
   const now = performance.now();
   if (now - lastChipUpdate > 300) {
@@ -647,7 +846,11 @@ function updateChips(r: FrameReport): void {
   setChip('chip-perf', fps >= 12 ? 'ok' : fps >= 6 ? 'warn' : 'bad', `${fps.toFixed(0)} fps`);
   const banner = $('banner');
   const msg = r.policy.blocked
-    ? `Path blocked${r.policy.guideSide ? `: step ${r.policy.guideSide}` : ''}`
+    ? r.policy.noWayAround
+      ? 'Path blocked: no clear way around'
+      : `Path blocked${r.policy.guideSide ? `: step ${r.policy.guideSide}${r.policy.guideFrom === 'path' ? ' (stays on path)' : ''}` : ''}`
+    : r.policy.unexplainedLooming
+      ? `Something approaching from the ${r.policy.unexplainedLooming}`
     : r.quality === 'dark'
       ? 'Too dark to see well'
       : r.quality === 'blurry'
@@ -675,11 +878,92 @@ function renderStats(st: FrameReport['stats']): void {
 // ---------------------------------------------------------------------------
 // Track run: lane guidance + live run stats (KineticSpatial)
 // ---------------------------------------------------------------------------
-async function startTrack(): Promise<void> {
-  const usingFile = testVideo !== null;
+const SIM_OVERRIDES: Record<'stadium' | 'road' | 'purple', Partial<Settings>> = {
+  stadium: { trackCourse: 'lanes', lineColor: 'white', mountHeight: 1.3, cameraFacing: 'same' },
+  road: { trackCourse: 'line', lineColor: 'yellow', mountHeight: 1.3, cameraFacing: 'same' },
+  purple: { trackCourse: 'line', lineColor: 'purple', mountHeight: 1.3, cameraFacing: 'same' },
+};
+
+/** Practice / demo: the real track pipeline driven by the built-in simulator. */
+async function startSimulator(pick?: 'stadium' | 'road' | 'purple'): Promise<void> {
+  await audio.unlock().catch(() => {});
+  announcer.unlock();
+  const course = pick ?? (settings.trackCourse === 'lanes' ? 'stadium' : settings.lineColor === 'purple' ? 'purple' : 'road');
+  motion.stop(); // the simulator provides motion; ignore the real phone's sensors meanwhile
+  sim = new TrackSimulator(course, motion);
+  simOverrides = SIM_OVERRIDES[course];
+  $<HTMLSelectElement>('sim-course').value = course;
+  $('sim-view').prepend(sim.canvas);
+  $('sim-panel').hidden = false;
+  $('screen-track').classList.add('simulating');
+  await startTrack(sim.source());
+  announcer.showText('Simulator running. The autopilot runner only hears EchoPath. Use Left and Right, or the arrow keys, to drift on purpose.');
+}
+
+function stopSimulator(): void {
+  if (!sim) return;
+  sim.stop();
+  sim.canvas.remove();
+  sim = null;
+  simOverrides = null;
+  $('sim-panel').hidden = true;
+  $('screen-track').classList.remove('simulating');
+  if (settings.mount !== 'table') void motion.start();
+}
+
+for (const [id, key] of [
+  ['sim-left', 'left'],
+  ['sim-right', 'right'],
+] as const) {
+  const el = $(id);
+  const set = (v: boolean) => () => sim && (sim.input[key] = v);
+  el.addEventListener('pointerdown', set(true));
+  el.addEventListener('pointerup', set(false));
+  el.addEventListener('pointerleave', set(false));
+  el.addEventListener('pointercancel', set(false));
+}
+document.addEventListener('keydown', (e) => {
+  if (!sim) return;
+  if (e.key === 'ArrowLeft') sim.input.left = true;
+  if (e.key === 'ArrowRight') sim.input.right = true;
+});
+document.addEventListener('keyup', (e) => {
+  if (!sim) return;
+  if (e.key === 'ArrowLeft') sim.input.left = false;
+  if (e.key === 'ArrowRight') sim.input.right = false;
+});
+$('sim-auto').addEventListener('click', (e) => {
+  if (!sim) return;
+  sim.autopilot = !sim.autopilot;
+  const b = e.currentTarget as HTMLButtonElement;
+  b.setAttribute('aria-pressed', String(sim.autopilot));
+  b.textContent = `Autopilot: ${sim.autopilot ? 'on' : 'off'}`;
+});
+$<HTMLSelectElement>('sim-course').addEventListener('change', (e) => {
+  if (!sim) return;
+  if ((e.target as HTMLSelectElement).value === 'walk') {
+    stopTrack();
+    void startWalkSimulator();
+    return;
+  }
+  const c = (e.target as HTMLSelectElement).value as 'stadium' | 'road' | 'purple';
+  sim.setCourse(c);
+  simOverrides = SIM_OVERRIDES[c];
+  if (c === 'purple') void pgSeg.load().catch(() => {});
+  announcer.say(c === 'road' ? 'Road with a yellow guide line.' : 'Four hundred metre track, lane three.');
+});
+$('sim-slower').addEventListener('click', () => sim && (sim.runner.speed = Math.max(1.5, sim.runner.speed - 0.5)));
+$('sim-faster').addEventListener('click', () => sim && (sim.runner.speed = Math.min(7, sim.runner.speed + 0.5)));
+
+/** Truth vs estimate, for the simulator readout. */
+const simScore: { t: number; truth: number; est: number | null }[] = [];
+
+async function startTrack(simSource?: FrameSource, realWorld = false): Promise<void> {
+  const usingFile = testVideo !== null && !simSource;
   status('Starting track mode', usingFile ? 'Loading the test video.' : 'Your browser will ask for the camera and your location. Choose Allow for both.', { busy: true });
   if (!usingFile) announcer.say('Your browser will ask for the camera and your location. Choose Allow for both.');
-  const source: FrameSource = usingFile ? new FileSource(tvideo, testVideo!) : new CameraSource(tvideo, settings.cameraId, 60);
+  const source: FrameSource =
+    simSource ?? (usingFile ? new FileSource(tvideo, testVideo!) : new CameraSource(tvideo, settings.cameraId, 60));
   try {
     await source.start();
   } catch (e) {
@@ -690,6 +974,10 @@ async function startTrack(): Promise<void> {
     announcer.say(msg, { interrupt: true });
     return;
   }
+  track.pgSeg = pgSeg;
+  if (eff().lineColor === 'purple' && eff().trackCourse !== 'lanes') void pgSeg.load().catch((e) => console.warn('[EchoPath] PG model:', e));
+  // Google Project Guideline's sound pack (falls back to the glide tone if it can't decode).
+  if (settings.trackStyle === 'pg') await audio.loadPgSounds(BASE).catch(() => false);
   // The object model only powers "runner ahead"; lane guidance never waits for it.
   if (settings.trackObstacles && trackDetector.model !== 'efficientdet_lite0')
     void trackDetector.load('efficientdet_lite0').catch(() => {});
@@ -698,14 +986,39 @@ async function startTrack(): Promise<void> {
   $('screen-track').classList.add('worn');
   show('track');
   // Running: the camera faces the way you run. Only mirror if explicitly set to face you.
-  track.mirror = source.kind === 'camera' && settings.cameraFacing === 'toward';
+  track.mirror = !simSource && source.kind === 'camera' && settings.cameraFacing === 'toward';
+  // Live view: the real camera, large, with what EchoPath sees drawn on it.
+  if ((!simSource && settings.debugOverlay) || realWorld) {
+    $('sim-view').prepend(tvideo);
+    $('sim-panel').classList.add('live');
+    $('sim-panel').hidden = false;
+  }
   tvideo.style.transform = track.mirror ? 'scaleX(-1)' : '';
-  track.start(source);
   startMediaSession();
-  audio.earcon('start');
-  announcer.say(
-    'Track mode. Silence means you are centred in your lane. A ping from one side means you are drifting toward that line. Press and hold to pause, double-tap for your stats.',
-  );
+  const intro =
+    settings.trackStyle === 'tone'
+      ? 'A quiet steady tone means you are on line. If it moves to one side and gets harsher, you are drifting toward that line.'
+      : settings.trackStyle === 'guideline'
+        ? 'Silence means you are on line. Beeps in one ear tell you to steer that way. A high warning means you are at the edge. Stop means stop.'
+        : 'Silence means you are centred. A ping from one side means you are drifting toward that line. Stop means stop.';
+  if (settings.trackCountdown) {
+    announcer.say(`Track mode. ${intro} Ready.`, { interrupt: true });
+    await new Promise((r) => setTimeout(r, Math.min(9000, 1200 + intro.length * 55)));
+    for (const n of ['3', '2', '1']) {
+      audio.earcon('ok');
+      announcer.say(n, { system: false, priority: 0, interrupt: true });
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    announcer.say('Go.', { system: false, priority: 0, interrupt: true });
+    audio.earcon('start');
+    track.start(source);
+    if (sim) sim.frozen = false;
+  } else {
+    track.start(source);
+    if (sim) sim.frozen = false;
+    audio.earcon('start');
+    announcer.say(`Track mode. ${intro} Press and hold to pause, double-tap for your stats.`);
+  }
 }
 
 function setTrackPaused(p: boolean): void {
@@ -720,11 +1033,13 @@ function setTrackPaused(p: boolean): void {
 function toggleTrackPause(): void {
   if (track.state === 'running') {
     track.pause();
+    if (sim) sim.frozen = true;
     setTrackPaused(true);
     audio.earcon('pause');
     announcer.say('Paused. Press and hold to resume.');
   } else if (track.state === 'paused') {
     track.resume();
+    if (sim) sim.frozen = false;
     setTrackPaused(false);
     audio.earcon('resume');
     announcer.say('Resumed.');
@@ -738,11 +1053,22 @@ function sayStats(): void {
 
 function stopTrack(): void {
   track.stop();
+  stopSimulator();
+  if (realPhoto) {
+    realPhoto = false;
+    simOverrides = null;
+    $('sim-panel').classList.remove('real');
+  }
+  if ($('sim-panel').classList.contains('live')) {
+    $('tpip').prepend(tvideo);
+    $('sim-panel').classList.remove('live');
+    $('sim-panel').hidden = true;
+  }
   wakeLock.release();
   stopMediaSession();
   audio.earcon('stop');
-  announcer.say(`Run finished. ${track.describe()}`);
-  show('welcome');
+  announcer.say(track.finish(), { interrupt: true });
+  returnHome();
 }
 
 attachGestures($('track-target'), () => toggleTrackPause(), () => sayStats(), () => toggleTrackPause());
@@ -753,8 +1079,25 @@ $('btn-tsettings').addEventListener('click', () => openSettings());
 
 let lastTrackUi = 0;
 track.onFrame = (r: TrackReport) => {
-  drawLaneGauge($<HTMLCanvasElement>('lane-gauge'), r);
-  if (settings.debugOverlay) drawLaneOverlay($<HTMLCanvasElement>('toverlay'), tvideo, r);
+  const eff = simOverrides ? { ...settings, ...simOverrides } : settings;
+  drawLaneGauge($<HTMLCanvasElement>('lane-gauge'), r, 0.61, eff.trackCourse);
+  if (sim) {
+    sim.guidance = r.guide;
+    sim.halted = r.stopped;
+    drawLaneOverlay($<HTMLCanvasElement>('sim-overlay'), sim.canvas, r, sim.camera());
+    simScore.push({ t: performance.now(), truth: sim.lateral, est: r.world ? r.world.lateral : null });
+    while (simScore.length && performance.now() - simScore[0].t > 60000) simScore.shift();
+  } else if ($('sim-panel').classList.contains('live')) {
+    drawLaneOverlay($<HTMLCanvasElement>('sim-overlay'), tvideo, r);
+    if (realPhoto) {
+      const sc = goldenScore(pgSeg.latest?.keypoints ?? []);
+      $('sim-truth').textContent = sc
+        ? `Google's model vs Google's hand labels: ${Math.round(sc.precision * 100)}% of points on the real line, ${Math.round(sc.recall * 100)}% of the line found, mean miss ${sc.errPx.toFixed(1)} px\nEchoPath: ${r.world ? `${Math.abs(r.world.lateral).toFixed(2)} m ${r.world.lateral > 0 ? 'right of' : 'left of'} the line` : 'line not locked'} · ${r.guide.magnitude > 0.05 ? `steer ${r.guide.steer > 0 ? 'right' : 'left'}` : 'on line'}`
+        : "Running Google's model on the real photo...";
+    }
+  } else if (settings.debugOverlay) {
+    drawLaneOverlay($<HTMLCanvasElement>('toverlay'), tvideo, r);
+  }
   const now = performance.now();
   if (now - lastTrackUi < 250) return;
   lastTrackUi = now;
@@ -765,11 +1108,23 @@ track.onFrame = (r: TrackReport) => {
   $('m-cad').textContent = run.cadence ? String(Math.round(run.cadence)) : '–';
   $('m-hr').textContent = run.heartRate ? String(run.heartRate) : '–';
   $('m-laps').textContent = String(run.laps);
-  setChip('tchip-lane', r.lost ? 'bad' : r.level === 'centred' ? 'ok' : 'warn', r.lost ? 'No lane lines' : r.level === 'centred' ? 'In lane' : 'Drifting');
+  setChip(
+    'tchip-lane',
+    r.stopped || r.lost ? 'bad' : r.level === 'centred' ? 'ok' : 'warn',
+    r.stopped ? 'STOP' : r.lost ? 'No line' : r.level === 'centred' ? (r.bend ? `On line, bend ${r.bend}` : 'On line') : 'Drifting',
+  );
   const gps = runTracker.gpsState;
   setChip('tchip-gps', gps === 'ok' ? 'ok' : gps === 'waiting' ? 'warn' : 'idle', gps === 'ok' ? 'GPS' : gps === 'waiting' ? 'GPS searching' : 'Step distance');
   setChip('tchip-hr', run.heartRate ? 'ok' : 'idle', run.heartRate ? `${run.heartRate} bpm` : 'No HR');
   setChip('tchip-perf', r.fps >= 24 ? 'ok' : r.fps >= 12 ? 'warn' : 'bad', `${r.fps.toFixed(0)} fps`);
+  if (sim) {
+    const withEst = simScore.filter((s) => s.est !== null);
+    const rms = withEst.length ? Math.sqrt(withEst.reduce((a, s) => a + (s.truth - s.est!) ** 2, 0) / withEst.length) : NaN;
+    const inLane = simScore.filter((s) => Math.abs(s.truth) < (eff.trackCourse === 'lanes' ? 0.61 : 0.5)).length / Math.max(1, simScore.length);
+    $('sim-truth').textContent =
+      `Truth: ${Math.abs(sim.lateral).toFixed(2)} m ${sim.lateral > 0 ? 'right' : 'left'} · EchoPath: ${r.world ? `${Math.abs(r.world.lateral).toFixed(2)} m ${r.world.lateral > 0 ? 'right' : 'left'}` : '–'}\n` +
+      `Estimate error (RMS, last min): ${Number.isFinite(rms) ? rms.toFixed(2) + ' m' : '–'} · In lane: ${(inLane * 100).toFixed(0)}% · ${sim.runner.speed.toFixed(1)} m/s · ${Math.round(sim.runner.distance)} m`;
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -938,7 +1293,24 @@ function fillForm(): void {
   setChecked('debugOverlay', settings.debugOverlay);
   setChecked('heartbeat', settings.heartbeat);
   setVal('cueDensity', settings.cueDensity);
-  setVal('trackCueSide', settings.trackCueSide);
+  setChecked('depthCane', settings.depthCane);
+  setVal('echoEverySec', String(settings.echoEverySec));
+  setVal('latencyMode', settings.latencyMode);
+  setChecked('btKeepAlive', settings.btKeepAlive);
+  setVal('soundScene', settings.soundScene);
+  setVal('sceneLevel', String(Math.round(settings.sceneLevel * 100)));
+  setVal('trackCourse', settings.trackCourse);
+  setVal('lineColor', settings.lineColor);
+  setVal('edgeSide', settings.edgeSide);
+  setVal('trackStyle', settings.trackStyle);
+  setVal('earVibration', String(Math.round(settings.earVibration * 100)));
+  setChecked('runBeacon', settings.runBeacon);
+  setVal('mountHeight', String(settings.mountHeight));
+  setVal('edgeGap', String(settings.edgeGap));
+  setVal('targetPace', settings.targetPaceS ? `${Math.floor(settings.targetPaceS / 60)}:${String(settings.targetPaceS % 60).padStart(2, '0')}` : '');
+  setVal('metronomeSpm', String(settings.metronomeSpm));
+  setVal('hrMax', String(settings.hrMax));
+  setChecked('trackCountdown', settings.trackCountdown);
   setVal('trackDeadband', String(Math.round(settings.trackDeadband * 100)));
   setChecked('trackHaptics', settings.trackHaptics);
   setVal('trackAnnounce', settings.trackAnnounce);
@@ -947,6 +1319,7 @@ function fillForm(): void {
   setVal('runStepLength', String(settings.runStepLength));
   setVal('maxHeartRate', String(settings.maxHeartRate));
   setChecked('trackObstacles', settings.trackObstacles);
+  setChecked('wideAngle', settings.wideAngle);
   syncOutputs();
 }
 
@@ -964,6 +1337,8 @@ function syncOutputs(): void {
     ['fovDeg', 'fovOut', ' degrees'],
     ['spatialSpread', 'spreadOut', ' times'],
     ['trackDeadband', 'deadbandOut', ' percent'],
+    ['sceneLevel', '', ' percent'],
+    ['earVibration', '', ' percent'],
     ['volume', '', ' percent'],
   ];
   for (const [name, out, unit] of pairs) {
@@ -994,7 +1369,11 @@ form.addEventListener('input', (e) => {
     case 'trackAnnounceMinutes':
     case 'lapMeters':
     case 'runStepLength':
-    case 'maxHeartRate': {
+    case 'maxHeartRate':
+    case 'metronomeSpm':
+    case 'hrMax':
+    case 'mountHeight':
+    case 'edgeGap': {
       const n = Number(t.value);
       if (!Number.isFinite(n) || t.value === '') return;
       patch[t.name] = n;
@@ -1003,6 +1382,23 @@ form.addEventListener('input', (e) => {
     case 'trackDeadband':
       patch.trackDeadband = Number(t.value) / 100;
       break;
+    case 'sceneLevel':
+      patch.sceneLevel = Number(t.value) / 100;
+      break;
+    case 'earVibration':
+      patch.earVibration = Number(t.value) / 100;
+      break;
+    case 'echoEverySec':
+      patch.echoEverySec = Number(t.value);
+      if (patch.echoEverySec > 0) void depthClient.load().catch(() => {});
+      break;
+    case 'targetPace': {
+      const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(t.value);
+      if (t.value.trim() === '') patch.targetPaceS = 0;
+      else if (m) patch.targetPaceS = Number(m[1]) * 60 + Number(m[2]);
+      else return; // wait until it's a complete mm:ss
+      break;
+    }
     case 'cameraId':
       patch.cameraId = t.value;
       void switchCamera(t.value);
@@ -1020,6 +1416,11 @@ form.addEventListener('input', (e) => {
     case 'heartbeat':
     case 'trackHaptics':
     case 'trackObstacles':
+    case 'trackCountdown':
+    case 'depthCane':
+    case 'btKeepAlive':
+    case 'runBeacon':
+    case 'wideAngle':
       patch[t.name] = t.checked;
       if (t.name === 'debugOverlay' && !t.checked) clearOverlay(overlay);
       break;
@@ -1030,6 +1431,10 @@ form.addEventListener('input', (e) => {
   if (t.name === 'cameraFacing') updateMirror();
   if (t.name === 'volume') audio.earcon('ok'); // let the user hear the new level
   if (t.name === 'spatialSpread') void audio.spatialTest(2.5);
+  if (t.name === 'metronomeSpm' && track.state === 'running') audio.setMetronome(settings.metronomeSpm);
+  if (t.name === 'depthCane' && settings.depthCane) void depthClient.load().catch(() => {});
+  if (t.name === 'trackStyle' && settings.trackStyle === 'pg') void audio.loadPgSounds(BASE);
+  if (t.name === 'latencyMode') void outputLabel().then((l) => applyLatencyMode(classifyOutput(l)));
 });
 
 function update(patch: Partial<Settings>): void {
@@ -1043,8 +1448,11 @@ function applySettings(s: Settings): void {
   audio.setMode(s.mode);
   audio.style = s.soundStyle;
   audio.spread = s.spatialSpread;
+  audio.sceneLevel = s.sceneLevel;
+  audio.setKeepAlive(s.btKeepAlive);
+  if (s.soundScene !== 'surround') audio.updateScene([]);
   announcer.voiceGuidance = s.voiceGuidance;
-  session.applySettings(s);
+  session.applySettings(simOverrides ? { ...s, ...simOverrides } : s);
   if (s.theme === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = s.theme;
   $('pip').hidden = !s.debugOverlay;
@@ -1075,11 +1483,11 @@ $('btn-spatial-test').addEventListener('click', async (e) => {
   await audio.unlock().catch(() => {});
   if (settings.audioOutputId) await audio.setOutput(settings.audioOutputId).catch(() => {});
   btn.disabled = true;
-  btn.textContent = 'Listen: the sound moves left, ahead, right and back…';
-  announcer.showText('Playing spatial test. The sound moves from your left, to ahead, to your right, and back.');
+  btn.textContent = 'Listen: the sound circles all the way around you…';
+  announcer.showText('Playing spatial test. The sound circles all the way around you: ahead, right, behind, left.');
   await audio.spatialTest();
   btn.disabled = false;
-  btn.textContent = 'Test spatial sound (left, ahead, right)';
+  btn.textContent = 'Test spatial sound (full circle)';
 });
 
 /** Fill the camera and sound-output pickers (labels need camera permission first). */
@@ -1181,10 +1589,125 @@ dialog.addEventListener('close', () => {
   (track.state !== 'idle' ? $('track-target') : session.state === 'idle' ? $('btn-start') : pauseTarget).focus();
 });
 
+// ---------------------------------------------------------------------------
+// Voice menu (eyes-free start): speaks, listens, and always works by taps
+// ---------------------------------------------------------------------------
+const listener = new Listener();
+const voiceMenu = new VoiceMenu({
+  announcer,
+  audio,
+  listener,
+  getSettings: () => settings,
+  update,
+  startWalk: () => void $('btn-start').click(),
+  startTrack: () => void $('btn-start').click(),
+  startSimulator: () => void startSimulator(),
+  soundCheck: () => audio.spatialTest(4),
+  render: renderVoice,
+  close: () => {
+    /* the started mode shows its own screen */
+  },
+});
+
+function renderVoice(step: MenuStep, hi: number, heard: string): void {
+  $('voice-title').textContent = step.title;
+  $('voice-prompt').textContent = step.prompt;
+  const ol = $('voice-options');
+  ol.replaceChildren(
+    ...step.options.map((o, i) => {
+      const li = document.createElement('li');
+      li.textContent = o.label;
+      if (i === hi) li.dataset.hi = '';
+      return li;
+    }),
+  );
+  $('voice-heard').textContent = heard;
+  $('voice-target-label').textContent = `Tap to choose: ${step.options[hi]?.label ?? ''}`;
+}
+
+/** Tap / hold / double-tap on the voice screen (single tap waits briefly to rule out a double). */
+(() => {
+  const el = $('voice-target');
+  const HOLD = 600, DOUBLE = 350;
+  let timer: number | undefined, tapTimer: number | undefined, held = false, taps = 0, lastPointer = 0;
+  const first = async () => {
+    // The very first tap unlocks audio and speech (browsers require a tap).
+    await audio.unlock().catch(() => {});
+    announcer.unlock();
+    voiceMenu.begin();
+  };
+  const tap = () => (voiceMenu.active ? voiceMenu.tap() : void first());
+  el.addEventListener('pointerdown', () => {
+    held = false;
+    clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      held = true;
+      navigator.vibrate?.(30);
+      if (voiceMenu.active) voiceMenu.hold();
+      else void first();
+    }, HOLD);
+  });
+  const cancel = () => clearTimeout(timer);
+  el.addEventListener('pointercancel', cancel);
+  el.addEventListener('pointerleave', cancel);
+  el.addEventListener('pointerup', () => {
+    clearTimeout(timer);
+    lastPointer = performance.now();
+    if (held) return;
+    taps++;
+    clearTimeout(tapTimer);
+    tapTimer = window.setTimeout(() => {
+      const n = taps;
+      taps = 0;
+      if (n >= 2 && voiceMenu.active) voiceMenu.back();
+      else tap();
+    }, DOUBLE);
+  });
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Screen readers / keyboard: activation = choose.
+  el.addEventListener('click', () => {
+    if (performance.now() - lastPointer > 600) tap();
+  });
+  el.addEventListener('keydown', (e) => {
+    if (!voiceMenu.active) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      voiceMenu.hold();
+    } else if (e.key === 'Escape' || e.key === 'Backspace' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      voiceMenu.back();
+    }
+  });
+})();
+
+$('btn-visual-menu').addEventListener('click', () => {
+  voiceMenu.active = false;
+  listener.stop();
+  announcer.cancel();
+  update({ voiceMenu: false });
+  show('welcome');
+});
+$('btn-voice-menu').addEventListener('click', async () => {
+  update({ voiceMenu: true });
+  show('voice');
+  await audio.unlock().catch(() => {});
+  announcer.unlock();
+  voiceMenu.begin();
+});
+
+/** After stopping: back to the voice menu (eyes-free) or the visual home. */
+function returnHome(): void {
+  if (settings.voiceMenu) {
+    show('voice');
+    setTimeout(() => voiceMenu.begin(), 2500);
+  } else show('welcome');
+}
+
 // Initial state (after every const above is initialised).
 applySettings(settings);
+if (settings.voiceMenu) show('voice');
 void audio.setOutput(settings.audioOutputId); // remembered headphones; applied when audio starts
 void refreshChecks();
 
 // Dev/test hook (used by automated checks; harmless in production).
-(window as unknown as { echopath: unknown }).echopath = { session, track, audio, detector, motion, runTracker, get settings() { return settings; } };
+(window as unknown as { echopath: unknown }).echopath = { get sim() { return sim; }, get wsim() { return wsim; }, voiceMenu, session, track, audio, detector, motion, runTracker, get settings() { return settings; } };

@@ -7,6 +7,8 @@ export interface FrameSource {
   readonly video: HTMLVideoElement;
   /** Which way the camera points, when the browser reports it. */
   readonly facing: 'environment' | 'user' | 'unknown';
+  /** Optical zoom in use (< 1 = ultra-wide). Widens the effective field of view. */
+  readonly zoom?: number;
   start(): Promise<void>;
   stop(): void;
   /** Called when the stream ends or is muted (another app took the camera, etc). */
@@ -26,6 +28,7 @@ export class CameraSource implements FrameSource {
   readonly kind = 'camera';
   facing: 'environment' | 'user' | 'unknown' = 'unknown';
   label = '';
+  zoom = 1;
   onLost: ((reason: string) => void) | null = null;
   private stream: MediaStream | null = null;
 
@@ -35,6 +38,8 @@ export class CameraSource implements FrameSource {
     private readonly deviceId = '',
     /** Track mode asks for 60 fps: faster lane updates while running. */
     private readonly frameRate = 30,
+    /** Use the widest zoom the camera offers (ultra-wide lens on many phones). */
+    private readonly wide = false,
   ) {}
 
   get active(): boolean {
@@ -69,6 +74,19 @@ export class CameraSource implements FrameSource {
     const fm = track.getSettings().facingMode;
     this.facing = fm === 'environment' ? 'environment' : fm === 'user' ? 'user' : 'unknown';
     this.label = track.label;
+    // Wider view, more like a compound eye: many phones expose the ultra-wide
+    // lens as zoom < 1 on the main camera track.
+    if (this.wide) {
+      const caps = track.getCapabilities?.() as MediaTrackCapabilities & { zoom?: { min: number; max: number } };
+      if (caps?.zoom && caps.zoom.min < 1) {
+        try {
+          await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min } as MediaTrackConstraintSet] });
+          this.zoom = caps.zoom.min;
+        } catch {
+          /* not allowed on this device: keep the normal view */
+        }
+      }
+    }
     track.addEventListener('ended', () => this.onLost?.('ended'));
     track.addEventListener('mute', () => this.onLost?.('muted'));
     this.video.srcObject = this.stream;
@@ -113,6 +131,50 @@ export class FileSource implements FrameSource {
     this.video.load();
     if (this.url) URL.revokeObjectURL(this.url);
     this.url = null;
+  }
+}
+
+/**
+ * A real-world still photo (e.g. Project Guideline's test frame), streamed
+ * like a camera so the full pipeline runs on it.
+ */
+export class ImageSource implements FrameSource {
+  readonly kind = 'file';
+  readonly facing = 'unknown';
+  onLost: ((reason: string) => void) | null = null;
+  readonly image = new Image();
+  private canvas = document.createElement('canvas');
+  private timer: number | undefined;
+  private stream: MediaStream | null = null;
+
+  constructor(
+    readonly video: HTMLVideoElement,
+    private readonly url: string,
+  ) {}
+
+  async start(): Promise<void> {
+    this.image.src = this.url;
+    await this.image.decode();
+    this.canvas.width = this.image.naturalWidth;
+    this.canvas.height = this.image.naturalHeight;
+    const g = this.canvas.getContext('2d')!;
+    const draw = () => g.drawImage(this.image, 0, 0);
+    draw();
+    this.timer = window.setInterval(draw, 1000 / 30); // keep frames flowing
+    this.stream = this.canvas.captureStream(30);
+    this.video.removeAttribute('src');
+    this.video.srcObject = this.stream;
+    this.video.muted = true;
+    this.video.playsInline = true;
+    await this.video.play();
+    await waitForSize(this.video);
+  }
+
+  stop(): void {
+    clearInterval(this.timer);
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.video.srcObject = null;
   }
 }
 

@@ -17,6 +17,8 @@ export interface Track {
   confirmed: boolean;
   zone: Zone;
   azimuth: number;
+  /** Radians above (+) or below (-) the camera axis: head-height things sound higher. */
+  elevation?: number;
   distance: number;
   band: DistanceBand;
   /** Seconds until contact, from box growth (tau ~ h / (dh/dt)); Infinity if not approaching. */
@@ -180,6 +182,7 @@ export class Tracker {
       tr.confirmed = tr.hits >= CONFIRM_HITS;
       tr.zone = zoneOf(tr.box, cfg);
       tr.azimuth = azimuthRad(tr.box, cfg.frame, cfg.focal);
+      tr.elevation = Math.atan(((0.5 - centerY(tr.box)) * cfg.frame.height) / cfg.focal);
       tr.distance = distanceM(tr.box, cfg.frame, cfg.focal, info.height, info.width);
       tr.band = bandOf(tr.distance);
       tr.ttc = timeToContact(tr.history);
