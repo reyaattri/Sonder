@@ -856,7 +856,7 @@ input[type='number'] {
   aspect-ratio: var(--ar, 0.75);
 }
 .sim-truth.scan {
-  color: var(--text);
+  color: var(--fg);
   font-size: 1rem;
   font-family: inherit;
   font-weight: 600;
@@ -883,3 +883,79 @@ input[type='number'] {
 .voice-caption[hidden] {
   display: none;
 }
+
+/* ------------------------------------------------------------- home: one question at a time */
+.home-flow {
+  display: grid;
+  gap: 12px;
+}
+.home-flow h2 {
+  font-size: clamp(1.6rem, 6vw, 2.2rem);
+  margin: 0;
+}
+.home-flow .hint {
+  margin: 0;
+}
+.home-choices {
+  display: grid;
+  gap: 14px;
+}
+.home-choice {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  min-height: 96px;
+  padding: 18px 20px;
+  border-radius: 20px;
+  border: 3px solid var(--line);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.home-choice .choice-name {
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+.home-choice .choice-desc {
+  font-size: 1rem;
+  color: var(--muted);
+}
+.home-choice.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.home-choice.primary .choice-desc {
+  color: var(--on-accent);
+}
+.home-choice.back {
+  min-height: 64px;
+  font-weight: 700;
+}
+.home-choice:focus-visible {
+  outline: 4px solid var(--accent-text);
+  outline-offset: 3px;
+}
+.home-tools {
+  margin-top: 8px;
+}
+
+/* First visit: browsers keep sound off until the first tap. */
+.sound-on {
+  width: 100%;
+  min-height: 64px;
+  border-radius: 16px;
+  border: 3px solid var(--accent);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 700;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.sound-on[hidden] {
+  display: none;
+}
+

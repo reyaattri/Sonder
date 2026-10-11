@@ -25,7 +25,7 @@ EchoPath has two modes, chosen on the home screen:
 8. **Allow the camera** (and motion sensors on iPhone) when asked. Allow the microphone if you want to answer by voice.
 9. **Connect headphones** (Bluetooth or wired) and run *Sound check*. The sound should circle your head.
 10. **Wear the phone** on your chest or waist, back camera facing forward, tilted slightly down.
-11. **Choose a mode** under *Live and practice*: *Live: scan around you, then walk*, *Live: walk or run along a painted line*, or *Live: run in a track lane*. Or use *Start*.
+11. **Choose on the home screen**: *Live view* → *Scan around you, then walk*, *Walk or run along a painted line*, or *Run in a track lane*. Or use *Start*.
 12. **Optional: install it.** Chrome menu → *Add to Home screen*, or Safari Share → *Add to Home Screen*, so it opens full-screen like an app.
 
 If the page won't load on the phone: check that both are on the same Wi-Fi, and allow Node.js through the Windows firewall (Windows asks the first time; choose *Private networks*). If the camera won't open, make sure the address starts with `https://`.
@@ -190,7 +190,7 @@ The White Cane app reads the iPhone LiDAR scanner through ARKit. Browsers cannot
   - STOP fires if the line is lost while moving, or you leave the lane: into the next lane on a track, or more than 1.5 m off a single painted line (smaller drifts get guidance back, not STOP).
   - Paint worn away or covered: if no line has been seen for 1.5 s while it should be in view, it's lost (STOP). A line that's only out of view because you drifted is followed from memory.
 - **Smooth guide tone** (default): one continuous tone that glides from low to high as the needed correction grows, swells softly instead of beeping, comes from the side to steer toward, and fades to silence on line. A soft edge warning sounds in the other ear. Speech only for a big drift that lasts: "Move left."
-- **Simulator** (Home, *Live and practice*):
+- **Simulator** (Home → *Simulation*):
   - a real 400 m track (84.39 m straights, 36.5 m bend radius, 1.22 m lanes), or a road with a yellow guide line;
   - rendered from a chest camera into the **real** pipeline, with simulated step bounce, tilt and turn rate;
   - steer by hand, or let the autopilot (a runner who only hears EchoPath) run.
@@ -206,7 +206,7 @@ The track sounds come from an open-source (Apache-2.0) guide-line sound pack (se
 
 ### Live modes: the real world, through your camera
 
-Home → *Live and practice*, or say "live" in the voice menu.
+Home → *Live view*, or say "live" in the voice menu.
 
 | Live mode | What it does |
 |---|---|
@@ -251,6 +251,17 @@ Sounds carry where things are, continuously; speech is kept for what matters. Ev
 - **"Passed. Continue forward."** is now a soft chime with no words. "Way opened. Go ahead carefully." is only said after an actual STOP.
 - **Flat look-alikes** (shadows, road markings, manhole covers) get only the ground sound, never words. Only depth-measured bumps are spoken.
 
+### Home: the voice menu, one question at a time
+
+EchoPath **opens on the voice menu**, with its first question already on screen: *Live view or simulation?* (Live view · Simulation · Sound check · Settings), and a big *Tap anywhere to start* area. Browsers keep sound off until the first touch. That first tap turns sound on, says how EchoPath works, then asks the question out loud and listens. After that: **tap** to choose, **hold** for the next option, **double-tap** to go back, or just say the answer.
+
+1. **Live view or simulation?**
+2. **Live view** → *Scan around me, then walk* · *Walk or run along a painted line* · *Run in a track lane*.
+   **Simulation** → *Walk: park path* · *Run: 400 metre track* · *Run: road with a yellow guide line*.
+3. It starts. Live views ask you to accept the safety notice the first time. Stopping returns to the voice menu.
+
+**Visual menu** (top corner) shows the same choices as big buttons. It speaks every step once sound is on, and has a *How it works* button.
+
 ### Voice: everything spoken, and accurate speech-to-text
 
 - **The voice menu** covers walk, live scan, run, practice (every simulator), sound check and settings. After you stop, it comes back by itself.
@@ -268,7 +279,7 @@ Sounds carry where things are, continuously; speech is kept for what matters. Ev
 
 ### Practice (one dropdown)
 
-Home → *Live and practice*. The same dropdown is in the simulator panels, so you can switch between scenes while running.
+Home → *Simulation*. A dropdown in the simulator panels lets you switch between scenes while running.
 
 | Scene | What it is |
 |---|---|
@@ -298,6 +309,29 @@ The **walk simulator** feeds the real walk pipeline: object detector, Depth Anyt
 ### Voice menu (eyes-free)
 
 The app opens on a full-screen voice menu: *Tap anywhere to start.* It speaks each question, then listens ("walk", "run", "chest", "start", "louder", "turn on the cane", …). Taps always work: **tap** = choose the highlighted option, **press and hold** = next option, **double-tap** = back. If speech isn't understood: *Sorry, I didn't understand. Tap once for …*. It covers activity, phone position, course, the safety notice, a sound check ("did you hear it go around you?") and settings. The microphone is used only in the menu, never during guidance, because opening it switches Bluetooth headsets to mono.
+
+### Bluetooth earphones and spatial sound (tested)
+
+From the `sai` branch, **only `src/audio`** was taken (the audio engine), with two fixes. No screens were changed.
+
+- **Auto-routing** to connected Bluetooth earphones when no output has been chosen. *Fixed:* it always picks the **stereo** "Headphones" entry, never the mono "Headset / Hands-Free" one (which makes left and right impossible).
+- **Routing on Safari / Firefox / older Chrome** (where Web Audio itself can't choose a device): sound goes through a hidden `<audio>` element that can. *Fixed:* everything, including the keep-alive, goes through **one** output path, so sound is never played twice. The fallback only switches on when a device is chosen in Settings → Sound output.
+- Also in the engine: the browser's own output chooser where one exists, an output list with the kind of each device, and a left-then-right test chime. The sai branch's change that made the step-aside guide a buzz was **not** taken, because it's louder and harsher than the calm design.
+
+**Final measurements on the app's real audio output** (a left/right level meter on the final output, desktop Chrome, after all changes):
+
+| Test | Left vs right |
+|---|---|
+| Test chimes | first **left only** (+111 dB), second **right only** (−111 dB) |
+| Walking cue, person 60° left (HRTF) | **+9.8 dB left** |
+| Walking cue, person straight ahead | 0.1 dB (centred) |
+| Walking cue, person 60° right | **−10.8 dB** (right) |
+| Track: turn right needed | **right ear only** |
+| Track: turn left needed | **left ear only** |
+| Track: on the line | silent |
+| Fallback routing (`<audio>` element) | carries the sound; removed cleanly on "System default" |
+
+Plus unit tests: stereo-over-hands-free selection, more earphone names, no auto-switch when only speakers or a hands-free entry are present. **Not tested here:** real Bluetooth earphones (none connected to this laptop).
 
 ### Bluetooth headphones on Windows laptops
 

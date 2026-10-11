@@ -95,9 +95,18 @@ export class AudioEngine {
   private timer: number | undefined;
   private volume = 0.8;
   private sinkId = '';
+  /**
+   * Everything (cues, keep-alive) ends here. It feeds the AudioContext's own
+   * output, or - on browsers whose AudioContext cannot pick a device (Safari,
+   * Firefox, older Chrome) - an <audio> element that can (setSinkId), so a
+   * chosen Bluetooth headset still gets the sound. Never both: no double audio.
+   */
+  private outBus!: GainNode;
+  private bridge: { dest: MediaStreamAudioDestinationNode; el: HTMLAudioElement } | null = null;
 
   /** Must be called from a user gesture (iOS starts audio only after a tap). */
   async unlock(): Promise<void> {
+    const created = !this.ctx;
     if (!this.ctx) {
       const nav = navigator as Navigator & { audioSession?: { type: string } };
       // iOS 16.4+: play even when the ring/silent switch is on silent.
@@ -110,7 +119,9 @@ export class AudioEngine {
       limiter.ratio.value = 20;
       limiter.attack.value = 0.002;
       limiter.release.value = 0.12;
-      limiter.connect(ctx.destination);
+      this.outBus = ctx.createGain();
+      this.outBus.connect(ctx.destination);
+      limiter.connect(this.outBus);
       this.master = ctx.createGain();
       this.master.connect(limiter);
       this.cueBus = ctx.createGain();
@@ -136,10 +147,14 @@ export class AudioEngine {
       // A silent buffer fully unlocks output on older iOS.
       const b = ctx.createBufferSource();
       b.buffer = ctx.createBuffer(1, 1, 22050);
-      b.connect(ctx.destination);
+      b.connect(this.outBus);
       b.start();
     }
     if (this.ctx.state !== 'running') await this.ctx.resume();
+    // No saved choice: go to connected stereo Bluetooth headphones, if any (after
+    // sound has started, so the tap that started it is not used up).
+    if (created && !this.sinkId) void this.autoSelectBluetooth().catch(() => null);
+    if (this.bridge?.el.paused) void this.bridge.el.play().catch(() => {});
     if (this.timer === undefined) this.timer = window.setInterval(() => this.schedule(), TICK_MS);
   }
 
@@ -172,6 +187,12 @@ export class AudioEngine {
     this.voices.clear();
     for (const [k, p] of this.presences) this.releasePresence(k, p);
     this.keepAliveNode = null;
+    if (this.bridge) {
+      this.bridge.el.pause();
+      this.bridge.el.srcObject = null;
+      this.bridge.el.remove();
+      this.bridge = null;
+    }
     this.ctx = null;
     if (old) await old.close().catch(() => {});
     await this.unlock();
@@ -183,9 +204,114 @@ export class AudioEngine {
     return ((this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0)) * 1000;
   }
 
-  /** Whether the browser can route audio to a chosen device (Chrome/Edge 110+). */
+  /** Whether the browser can route audio to a chosen device (directly, or through an <audio> element). */
   static get canChooseOutput(): boolean {
-    return typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
+    return (
+      (typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype) ||
+      (typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype)
+    );
+  }
+
+  /** The browser has its own "choose an output device" window (Firefox; Chrome behind a flag). */
+  static get hasOutputPicker(): boolean {
+    return typeof navigator !== 'undefined' && !!navigator.mediaDevices && 'selectAudioOutput' in navigator.mediaDevices;
+  }
+
+  /** Switch the final output between the context itself and the <audio> bridge. */
+  private useBridge(on: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (on && !this.bridge) {
+      const dest = ctx.createMediaStreamDestination();
+      const el = document.createElement('audio');
+      el.autoplay = true;
+      el.setAttribute('playsinline', '');
+      el.style.display = 'none';
+      el.srcObject = dest.stream;
+      document.body.appendChild(el);
+      this.outBus.disconnect();
+      this.outBus.connect(dest);
+      this.bridge = { dest, el };
+      void el.play().catch(() => {});
+    } else if (!on && this.bridge) {
+      this.outBus.disconnect();
+      this.outBus.connect(ctx.destination);
+      this.bridge.el.pause();
+      this.bridge.el.srcObject = null;
+      this.bridge.el.remove();
+      this.bridge = null;
+    }
+  }
+
+  /**
+   * Connected outputs, with what kind each is (stereo Bluetooth, hands-free
+   * mono, wired headphones, speakers). Labels appear once the page has had
+   * a media permission, or after the browser's own output picker.
+   */
+  async getAudioOutputs(): Promise<{ deviceId: string; label: string; kind: OutputKind }[]> {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+    const devs = await navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[]);
+    return devs
+      .filter((d) => d.kind === 'audiooutput' && d.deviceId !== 'communications')
+      .map((d, i) => {
+        const label = d.label.replace(/^Default - /, '') || (d.deviceId === 'default' ? 'System default' : `Output ${i + 1}`);
+        return { deviceId: d.deviceId, label, kind: classifyOutput(label) };
+      });
+  }
+
+  /**
+   * Route to connected Bluetooth headphones: the STEREO entry, never the mono
+   * "hands-free / headset" one (which makes left and right impossible).
+   */
+  async autoSelectBluetooth(): Promise<{ deviceId: string; label: string } | null> {
+    if (!AudioEngine.canChooseOutput) return null;
+    const outs = (await this.getAudioOutputs()).filter((d) => d.deviceId !== 'default');
+    const pick = outs.find((d) => d.kind === 'bt-stereo') ?? outs.find((d) => d.kind === 'headphones');
+    if (!pick) return null;
+    await this.setOutput(pick.deviceId);
+    return { deviceId: pick.deviceId, label: pick.label };
+  }
+
+  /** Let the person choose: the browser's own device window if it has one, else auto-detect. */
+  async selectBluetoothOutput(): Promise<{ deviceId: string; label: string } | null> {
+    if (AudioEngine.hasOutputPicker) {
+      try {
+        const md = navigator.mediaDevices as MediaDevices & { selectAudioOutput(): Promise<MediaDeviceInfo> };
+        const d = await md.selectAudioOutput();
+        if (d?.deviceId) {
+          await this.setOutput(d.deviceId);
+          return { deviceId: d.deviceId, label: d.label || 'Selected headphones' };
+        }
+      } catch {
+        return null; // cancelled
+      }
+    }
+    return this.autoSelectBluetooth();
+  }
+
+  /** Two chimes: LEFT ear, then RIGHT ear. Hearing them on the two sides proves stereo routing. */
+  async testSound(): Promise<void> {
+    await this.unlock();
+    const ctx = this.ctx!;
+    const chime = (at: number, pan: number, f0: number, f1: number) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      const p = ctx.createStereoPanner();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(f0, at);
+      o.frequency.exponentialRampToValueAtTime(f1, at + 0.16);
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(0.45, at + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.001, at + 0.4);
+      p.pan.value = pan;
+      o.connect(g).connect(p).connect(this.master);
+      o.start(at);
+      o.stop(at + 0.42);
+    };
+    const t = ctx.currentTime + 0.05;
+    chime(t, -1, 587, 880);
+    chime(t + 0.6, 1, 880, 1175);
+    await new Promise((r) => setTimeout(r, 1200));
   }
 
   /**
@@ -195,7 +321,16 @@ export class AudioEngine {
   async setOutput(deviceId: string): Promise<void> {
     this.sinkId = deviceId;
     const ctx = this.ctx as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null;
-    if (ctx?.setSinkId) await ctx.setSinkId(deviceId);
+    if (!ctx) return;
+    if (ctx.setSinkId) {
+      this.useBridge(false);
+      await ctx.setSinkId(deviceId);
+      return;
+    }
+    // No AudioContext.setSinkId: go through an <audio> element that can, only when a device is chosen.
+    const elementCanSink = typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
+    this.useBridge(!!deviceId && elementCanSink);
+    if (this.bridge) await (this.bridge.el as HTMLAudioElement & { setSinkId(id: string): Promise<void> }).setSinkId(deviceId);
   }
 
   setVolume(v: number): void {
@@ -409,7 +544,7 @@ export class AudioEngine {
     n.loop = true;
     const g = ctx.createGain();
     g.gain.value = 0.00007; // about -83 dB
-    n.connect(g).connect(ctx.destination);
+    n.connect(g).connect(this.outBus);
     n.start();
     this.keepAliveNode = n;
   }
@@ -1154,7 +1289,7 @@ export type OutputKind = 'bt-stereo' | 'bt-handsfree' | 'headphones' | 'speakers
 export function classifyOutput(label: string): OutputKind {
   const l = label.toLowerCase();
   if (/hands-?free|headset|communications/.test(l)) return 'bt-handsfree';
-  if (/bluetooth|airpods|buds|wh-|wf-|ult wear|bose|jabra|beats|soundcore/.test(l)) return 'bt-stereo';
+  if (/bluetooth|airpod|buds|wh-|wf-|ult wear|bose|jabra|beats|soundcore|shokz|sony|jbl|galaxy|wireless/.test(l)) return 'bt-stereo';
   if (/headphone|earphone|earbud/.test(l)) return 'headphones';
   if (/speaker|realtek|internal|built-in|laptop/.test(l)) return 'speakers';
   return 'unknown';

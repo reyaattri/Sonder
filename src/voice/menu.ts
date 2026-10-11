@@ -35,12 +35,7 @@ export interface MenuDeps {
   listener: Listener;
   getSettings: () => Settings;
   update: (patch: Partial<Settings>) => void;
-  startWalk: () => void;
-  startTrack: () => void;
-  startSimulator: () => void;
-  /** Live camera: scan around you, then walk. */
-  startLiveWalk: () => void;
-  /** A practice scene from the dropdown (walk, stadium, road). */
+  /** Start a scene: live-walk, live-line, live-lane, or a simulation (walk, stadium, road). */
   startScene: (scene: string) => void;
   soundCheck: () => Promise<void>;
   render: (step: MenuStep, highlighted: number, heard: string) => void;
@@ -73,67 +68,24 @@ export class VoiceMenu {
     return {
       activity: {
         id: 'activity',
-        title: 'What would you like to do?',
-        prompt: 'What would you like to do? Walk, live scan, run, or practice.',
+        title: 'Live view or simulation?',
+        prompt: 'Live view, or simulation? Live view uses your camera in the real world. Simulation needs no camera.',
         options: [
-          { label: 'Walk', intents: ['walk'], run: () => (d.update({ activity: 'walk' }), this.open('mount')) },
-          {
-            label: 'Live: scan around me, then walk',
-            intents: ['live', 'scan'],
-            run: () => {
-              d.update({ activity: 'walk' });
-              if (!d.getSettings().disclaimerAccepted) return this.open('disclaimer');
-              this.close();
-              d.startLiveWalk();
-            },
-          },
-          { label: 'Run on a track', intents: ['run', 'lanes'], run: () => (d.update({ activity: 'track' }), this.open('course')) },
-          { label: 'Practice', intents: ['simulator'], run: go('practice') },
+          { label: 'Live view', intents: ['live', 'walk', 'run', 'scan'], run: go('live') },
+          { label: 'Simulation', intents: ['simulator'], run: go('practice') },
           { label: 'Sound check', intents: ['sound'], run: () => this.soundCheck() },
           { label: 'Settings', intents: ['settings'], run: go('settings') },
         ],
       },
-      mount: {
-        id: 'mount',
-        title: 'Where is the phone?',
-        prompt: 'Where is your phone? Chest, waist, in your hand, or on a table.',
+      live: {
+        id: 'live',
+        title: 'Which live view?',
+        prompt: 'Which live view? Scan around you, then walk. Walk or run along a painted line. Or run in a track lane.',
         options: [
-          { label: 'Chest', intents: ['chest'], run: () => (d.update({ mount: 'chest' }), this.open('ready')) },
-          { label: 'Waist', intents: ['waist'], run: () => (d.update({ mount: 'waist' }), this.open('ready')) },
-          { label: 'In my hand', intents: ['hand'], run: () => (d.update({ mount: 'hand' }), this.open('ready')) },
-          { label: 'On a table', intents: ['table'], run: () => (d.update({ mount: 'table' }), this.open('ready')) },
-        ],
-      },
-      course: {
-        id: 'course',
-        title: 'Where are you running?',
-        prompt: 'Where are you running? Track lanes, a painted guide line, or along a kerb.',
-        options: [
-          { label: 'Track lanes', intents: ['lanes', 'run'], run: () => (d.update({ trackCourse: 'lanes' }), this.open('ready')) },
-          { label: 'A painted guide line', intents: ['line'], run: () => (d.update({ trackCourse: 'line' }), this.open('ready')) },
-          { label: 'Along a kerb or road edge', intents: ['edge'], run: () => (d.update({ trackCourse: 'edge' }), this.open('ready')) },
-          { label: 'Practice in the simulator', intents: ['simulator'], run: () => (this.close(), d.startSimulator()) },
-        ],
-      },
-      ready: {
-        id: 'ready',
-        title: 'Ready',
-        prompt: `Ready to ${s.activity === 'track' ? 'run' : 'walk'}. Say start, or tap once to start.`,
-        options: [
-          {
-            label: 'Start',
-            intents: ['start', 'yes'],
-            run: () => {
-              if (!s.disclaimerAccepted) return this.open('disclaimer');
-              // The voice menu has its own sound check, so skip the visual one.
-              d.update({ headphoneCheckDone: true });
-              this.close();
-              if (s.activity === 'track') d.startTrack();
-              else d.startWalk();
-            },
-          },
-          { label: 'Sound check first', intents: ['sound'], run: () => this.soundCheck() },
-          { label: 'Settings', intents: ['settings'], run: go('settings') },
+          { label: 'Scan around me, then walk', intents: ['walk', 'scan'], run: () => this.start('live-walk') },
+          { label: 'Walk or run along a painted line', intents: ['line'], run: () => this.start('live-line') },
+          { label: 'Run in a track lane', intents: ['lanes', 'run'], run: () => this.start('live-lane') },
+          { label: 'Back', intents: ['done'], run: () => this.back() },
         ],
       },
       disclaimer: {
@@ -146,24 +98,24 @@ export class VoiceMenu {
             label: 'I understand',
             intents: ['yes', 'start', 'done'],
             run: () => {
+              // The voice menu has its own sound check, so skip the visual one.
               d.update({ disclaimerAccepted: true, headphoneCheckDone: true });
-              const fromLive = this.stack.includes('activity') && this.stack[this.stack.length - 1] === 'activity';
+              const scene = this.pending ?? 'live-walk';
+              this.pending = null;
               this.close();
-              if (d.getSettings().activity === 'track') d.startTrack();
-              else if (fromLive) d.startLiveWalk();
-              else d.startWalk();
+              d.startScene(scene);
             },
           },
         ],
       },
       practice: {
         id: 'practice',
-        title: 'Practice',
-        prompt: 'Practice. Walk simulator, track simulator, or road with a guide line.',
+        title: 'Which simulation?',
+        prompt: 'Which simulation? Walk on a park path, run on a 400 metre track, or run on a road with a guide line.',
         options: [
-          { label: 'Walk simulator: obstacles and people', intents: ['walk'], run: () => (this.close(), d.startScene('walk')) },
-          { label: 'Track simulator: 400 metre track', intents: ['run', 'lanes'], run: () => (this.close(), d.startScene('stadium')) },
-          { label: 'Road with a yellow guide line', intents: ['line'], run: () => (this.close(), d.startScene('road')) },
+          { label: 'Walk: park path with obstacles and people', intents: ['walk'], run: () => this.start('walk') },
+          { label: 'Run: 400 metre track', intents: ['run', 'lanes'], run: () => this.start('stadium') },
+          { label: 'Run: road with a yellow guide line', intents: ['line'], run: () => this.start('road') },
           { label: 'Back', intents: ['done'], run: () => this.back() },
         ],
       },
@@ -197,12 +149,40 @@ export class VoiceMenu {
     };
   }
 
-  /** Begin (from the first tap, which also unlocks audio and speech). */
-  begin(): void {
+  /** Scene waiting for the safety notice to be accepted. */
+  private pending: string | null = null;
+
+  /** Start a scene; live views need the safety notice accepted first. */
+  private start(scene: string): void {
+    const live = scene.startsWith('live');
+    if (live && !this.d.getSettings().disclaimerAccepted) {
+      this.pending = scene;
+      return this.open('disclaimer');
+    }
+    this.close();
+    this.d.startScene(scene);
+  }
+
+  /** Show the first question on screen straight away, silently (speech needs a tap first). */
+  preview(): void {
+    this.active = false;
+    this.stack = [];
+    this.step = this.steps().activity;
+    this.hi = 0;
+    this.d.render(this.step, 0, '');
+  }
+
+  /** Begin (from the first tap, which also unlocks audio and speech). `intro` is said first. */
+  begin(intro = ''): void {
     this.active = true;
     this.stack = [];
+    this.intro = intro;
+    this.step = null;
     this.open('activity');
   }
+
+  /** Said once before the first question (e.g. how EchoPath works). */
+  private intro = '';
 
   open(id: string, push = true): void {
     const step = this.steps()[id];
@@ -228,7 +208,8 @@ export class VoiceMenu {
     const taps = this.d.listener.supported
       ? ''
       : ' Tap once for ' + st.options[0].label + '. Press and hold for other options.';
-    this.d.announcer.say(st.prompt + taps, { interrupt: true, system: false, priority: 0 });
+    this.d.announcer.say(this.intro + st.prompt + taps, { interrupt: true, system: false, priority: 0 });
+    this.intro = '';
     void this.listen();
   }
 

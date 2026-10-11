@@ -133,7 +133,7 @@ export interface Settings {
   settingsVersion: number;
 }
 
-export const SETTINGS_VERSION = 8;
+export const SETTINGS_VERSION = 9;
 
 export type Mount = 'chest' | 'waist' | 'hand' | 'table';
 export type Activity = 'walk' | 'track';
@@ -246,6 +246,8 @@ export function migrate(s: Settings, raw: Partial<Settings>): Settings {
   }
   // v7: the purple guide-line option was removed; a saved purple becomes yellow.
   if ((s.lineColor as string) === 'purple') s.lineColor = 'yellow';
+  // v9: the app opens on the voice menu (the visual menu is one tap away).
+  if ((raw.settingsVersion ?? 1) < 9) s.voiceMenu = true;
   // v8: calm by default - no constant sounds. Surround presences and the run
   // beacon play all the time, so they are off; cues are calm.
   if ((raw.settingsVersion ?? 1) < 8) {

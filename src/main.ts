@@ -3,7 +3,7 @@ import { Session, type FrameReport } from './app/session';
 import { AudioEngine, classifyOutput } from './audio/engine';
 import { DepthClient } from './depth/client';
 import { CameraError, CameraSource, listCameras, shouldMirror, WakeLock, type FrameSource } from './camera/source';
-import { DEFAULT_SETTINGS, isWorn, loadSettings, saveSettings, type Activity, type Mount, type Settings } from './core/settings';
+import { DEFAULT_SETTINGS, isWorn, loadSettings, saveSettings, type Settings } from './core/settings';
 import { DetectionClient } from './detect/client';
 import { MODELS } from './detect/detector';
 import { MotionSensor } from './sensors/motion';
@@ -73,7 +73,11 @@ function show(id: ScreenId): void {
   }
   if (id === 'track') $('track-target').focus();
   if (id === 'sound') void refreshSound();
-  if (id === 'welcome') void refreshChecks();
+  if (id === 'welcome') {
+    renderHome('root', false);
+    if (soundOn) setTimeout(() => current === 'welcome' && announcer.say(homeSpeech('root')), 1800);
+    void refreshChecks();
+  }
 }
 
 function status(title: string, text: string, opts: { retry?: boolean; busy?: boolean } = {}): void {
@@ -93,74 +97,137 @@ function setCheck(name: string, state: CheckState, text: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Home: where is the phone? + ready check
+// Home: one question at a time, like the voice menu.
+//   Live view or simulation?  ->  which one  ->  it starts.
 // ---------------------------------------------------------------------------
-const MOUNT_HINT: Record<Mount, string> = {
-  chest:
-    'Clip the phone to a lanyard or chest strap with the back camera facing forward. While walking, press and hold the screen to pause.',
-  waist:
-    'Clip the phone to your belt with the back camera facing forward, tilted slightly up. While walking, press and hold the screen to pause.',
-  hand: 'Hold the phone at chest height, back camera pointing ahead. Double-tap the screen to pause.',
-  table: 'Prop the phone or laptop up facing the room, for demos. Double-tap the screen to pause.',
-};
-
-function renderActivity(): void {
-  document.querySelectorAll<HTMLButtonElement>('[data-activity]').forEach((b) => {
-    const on = b.dataset.activity === settings.activity;
-    b.setAttribute('aria-checked', String(on));
-    b.tabIndex = on ? 0 : -1;
-  });
-  const isTrack = settings.activity === 'track';
-  $('track-card').hidden = !isTrack;
-  $('mount-card').hidden = isTrack;
-  $('btn-start').textContent = isTrack ? 'Start run' : 'Start walking';
+type HomeStep = 'root' | 'live' | 'sim';
+interface HomeChoice {
+  name: string;
+  desc?: string;
+  run: () => void;
+  primary?: boolean;
+  back?: boolean;
 }
 
-$('activity-group').addEventListener('click', (e) => {
-  const a = (e.target as HTMLElement).closest<HTMLElement>('[data-activity]')?.dataset.activity as Activity | undefined;
-  if (!a) return;
-  update({ activity: a });
-  void refreshChecks();
-  announcer.showText(a === 'track' ? 'Track run selected.' : 'Walk selected.');
-});
-$('activity-group').addEventListener('keydown', (e) => {
-  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
-  e.preventDefault();
-  const a: Activity = settings.activity === 'walk' ? 'track' : 'walk';
-  update({ activity: a });
-  document.querySelector<HTMLButtonElement>(`[data-activity="${a}"]`)?.focus();
-});
-
-function renderMount(): void {
-  document.querySelectorAll<HTMLButtonElement>('[data-mount]').forEach((b) => {
-    const on = b.dataset.mount === settings.mount;
-    b.setAttribute('aria-checked', String(on));
-    b.tabIndex = on ? 0 : -1;
-  });
-  $('mount-hint').textContent = MOUNT_HINT[settings.mount];
+function homeStep(step: HomeStep): { q: string; hint: string; choices: HomeChoice[] } {
+  const back: HomeChoice = { name: '← Back', run: () => renderHome('root'), back: true };
+  if (step === 'live')
+    return {
+      q: 'Which live view?',
+      hint: 'Your camera, in the real world. Wear the phone with the back camera facing forward.',
+      choices: [
+        { name: 'Scan around you, then walk', desc: 'A 360° scan, then the walking guide: people, obstacles, steps, leaves.', run: () => void startFromHome('live-walk'), primary: true },
+        { name: 'Walk or run along a painted line', desc: 'Any colour of line: white, yellow or blue.', run: () => void startFromHome('live-line') },
+        { name: 'Run in a track lane', desc: 'Follows the two lane lines of a running track.', run: () => void startFromHome('live-lane') },
+        back,
+      ],
+    };
+  if (step === 'sim')
+    return {
+      q: 'Which simulation?',
+      hint: 'EchoPath runs on a simulated world. No camera needed.',
+      choices: [
+        { name: 'Walk: park path', desc: 'Poles, bins, benches, rocks, leaves and people.', run: () => void startFromHome('walk'), primary: true },
+        { name: 'Run: 400 m track, lane 3', desc: 'Includes "Demo all cases once".', run: () => void startFromHome('stadium') },
+        { name: 'Run: road with yellow guide line', desc: 'A bending road. Includes "Demo all cases once".', run: () => void startFromHome('road') },
+        back,
+      ],
+    };
+  return {
+    q: 'Live view or simulation?',
+    hint: 'Live view uses your camera in the real world. Simulation needs no camera.',
+    choices: [
+      { name: 'Live view', desc: 'Your camera, in the real world.', run: () => renderHome('live'), primary: true },
+      { name: 'Simulation', desc: 'Practise on a simulated path, track or road.', run: () => renderHome('sim') },
+    ],
+  };
 }
 
-$('mount-group').addEventListener('click', (e) => {
-  const m = (e.target as HTMLElement).closest<HTMLElement>('[data-mount]')?.dataset.mount as Mount | undefined;
-  if (!m) return;
-  update({ mount: m });
-  announcer.showText(MOUNT_HINT[m]);
+/** What EchoPath is, said when sound first turns on (and on "How it works"). */
+const HOW_IT_WORKS =
+  'Welcome to EchoPath. With headphones on, it turns what the camera sees into sound. ' +
+  'Things play from their direction: left, right or ahead, and closer means faster. ' +
+  'It stays quiet until something needs you: someone in your path, an obstacle, or drifting off your line. ' +
+  'Then it tells you which way to step or steer, and when to stop. ';
+
+let homeStepNow: HomeStep = 'root';
+/** "How it works" is said once per visit, on the first tap. */
+let introSaid = false;
+let soundOn = false;
+
+/** The question and its options, as one spoken sentence. */
+function homeSpeech(step: HomeStep): string {
+  const h = homeStep(step);
+  const opts = h.choices.filter((c) => !c.back).map((c) => c.name);
+  return `${h.q} ${opts.slice(0, -1).join(', ')}${opts.length > 1 ? ', or ' : ''}${opts[opts.length - 1]}.${step === 'root' ? ' ' + h.hint : ''}`;
+}
+
+/** First tap anywhere: sound on, then explain (unless the tap already chose something). */
+async function turnSoundOn(explain: boolean): Promise<void> {
+  if (soundOn) return;
+  soundOn = true;
+  $('sound-on').hidden = true;
+  await audio.unlock().catch(() => {});
+  announcer.unlock();
+  if (explain && current === 'welcome') announcer.say(HOW_IT_WORKS + homeSpeech(homeStepNow), { interrupt: true });
+}
+
+document.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (soundOn || current !== 'welcome') return;
+    const onChoice = !!(e.target as HTMLElement).closest('.home-choice, #btn-sound, #btn-settings-welcome, #btn-voice-menu');
+    void turnSoundOn(!onChoice);
+  },
+  { capture: true },
+);
+document.addEventListener(
+  'keydown',
+  () => {
+    if (!soundOn && current === 'welcome') void turnSoundOn(true);
+  },
+  { capture: true },
+);
+$('sound-on').addEventListener('click', () => void turnSoundOn(true));
+$('btn-how').addEventListener('click', async () => {
+  await turnSoundOn(false);
+  announcer.say(HOW_IT_WORKS + homeSpeech(homeStepNow), { interrupt: true });
+  announcer.showText(HOW_IT_WORKS);
 });
-// Arrow keys move between radio options (standard radiogroup behaviour).
-$('mount-group').addEventListener('keydown', (e) => {
-  const order: Mount[] = ['chest', 'waist', 'hand', 'table'];
-  const i = order.indexOf(settings.mount);
-  const d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-  if (!d) return;
-  e.preventDefault();
-  const m = order[(i + d + order.length) % order.length];
-  update({ mount: m });
-  document.querySelector<HTMLButtonElement>(`[data-mount="${m}"]`)?.focus();
-});
+
+function renderHome(step: HomeStep, focus = true): void {
+  homeStepNow = step;
+  const h = homeStep(step);
+  $('home-q').textContent = h.q;
+  $('home-hint').textContent = h.hint;
+  $('home-choices').replaceChildren(
+    ...h.choices.map((c) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `home-choice${c.primary ? ' primary' : ''}${c.back ? ' back' : ''}`;
+      const n = document.createElement('span');
+      n.className = 'choice-name';
+      n.textContent = c.name;
+      b.append(n);
+      if (c.desc) {
+        const d = document.createElement('span');
+        d.className = 'choice-desc';
+        d.textContent = c.desc;
+        b.append(d);
+      }
+      b.addEventListener('click', c.run);
+      return b;
+    }),
+  );
+  if (focus && current === 'welcome') {
+    $('home-q').focus();
+    // Every step is spoken once sound is on (and written for screen readers).
+    if (soundOn) announcer.say(homeSpeech(step), { interrupt: true });
+    else announcer.showText(homeSpeech(step));
+  }
+}
 
 async function refreshChecks(): Promise<void> {
-  renderMount();
-  renderActivity();
   // Track-mode checks
   try {
     const p = await navigator.permissions?.query({ name: 'geolocation' as PermissionName });
@@ -196,22 +263,32 @@ async function refreshChecks(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Start flow: Start -> (first run: safety notice -> headphone check) -> camera -> running
 // ---------------------------------------------------------------------------
-$('btn-start').addEventListener('click', async () => {
-  // Audio, speech and motion sensors can only start inside a tap on iOS.
-  // The motion permission request must come first, before any await.
-  if (settings.activity === 'track' || settings.mount !== 'table') void motion.start().then(() => refreshChecks());
+/** Scene to start once the safety notice is accepted. */
+let pendingScene: Scene | null = null;
+
+/** Start any scene from a tap (home buttons or the voice menu). */
+async function startFromHome(scene: Scene): Promise<void> {
+  const live = scene.startsWith('live');
+  if (live) {
+    // Audio, speech and motion sensors can only start inside a tap on iOS.
+    // The motion permission request must come first, before any await.
+    update({ activity: scene === 'live-walk' ? 'walk' : 'track' });
+    if (settings.activity === 'track' || settings.mount !== 'table') void motion.start().then(() => refreshChecks());
+  }
   await audio.unlock().catch(() => {});
   announcer.unlock();
-  void preloadModel().catch(() => {});
-  if (settings.activity === 'walk' && (settings.depthCane || settings.echoEverySec > 0))
+  if (scene === 'live-walk' || scene === 'walk') void preloadModel().catch(() => {});
+  if (!live) return startScene(scene); // simulations: nothing to accept, no camera
+  if (scene === 'live-walk' && (settings.depthCane || settings.echoEverySec > 0))
     void depthClient.load().catch((e) => console.warn('[EchoPath] depth unavailable:', e));
+  pendingScene = scene;
   if (!settings.disclaimerAccepted) {
     show('disclaimer');
     readDisclaimer();
     return;
   }
   await continueStart();
-});
+}
 
 function readDisclaimer(): void {
   announcer.say($('disclaimer-text').innerText.replace(/\n+/g, ' '), { interrupt: true });
@@ -231,7 +308,10 @@ async function continueStart(): Promise<void> {
     announcer.say(MONO_HELP_SPOKEN, { interrupt: true });
   }
   if (!settings.headphoneCheckDone) await headphoneCheck();
-  if (settings.activity === 'track') await startTrack();
+  const scene = pendingScene;
+  pendingScene = null;
+  if (scene) await startScene(scene);
+  else if (settings.activity === 'track') await startTrack();
   else await startRunning();
 }
 
@@ -758,7 +838,6 @@ async function startScene(scene: Scene): Promise<void> {
   return startSimulator(scene);
 }
 
-$('btn-practice').addEventListener('click', () => void startScene($<HTMLSelectElement>('practice-scene').value as Scene));
 $<HTMLSelectElement>('wsim-scene').addEventListener('change', (e) => {
   const v = (e.target as HTMLSelectElement).value as Scene;
   if (v === 'walk' || !wsim) return;
@@ -1502,8 +1581,6 @@ function applySettings(s: Settings): void {
   else document.documentElement.dataset.theme = s.theme;
   $('pip').hidden = !s.debugOverlay;
   $('tpip').hidden = !s.debugOverlay;
-  renderMount();
-  renderActivity();
   applyMountUi();
 }
 
@@ -1625,7 +1702,7 @@ $('btn-reset').addEventListener('click', () => {
 });
 
 dialog.addEventListener('close', () => {
-  (track.state !== 'idle' ? $('track-target') : session.state === 'idle' ? $('btn-start') : pauseTarget).focus();
+  (track.state !== 'idle' ? $('track-target') : session.state === 'idle' ? $('home-q') : pauseTarget).focus();
 });
 
 // ---------------------------------------------------------------------------
@@ -1638,11 +1715,7 @@ const voiceMenu = new VoiceMenu({
   listener,
   getSettings: () => settings,
   update,
-  startWalk: () => void $('btn-start').click(),
-  startTrack: () => void $('btn-start').click(),
-  startSimulator: () => void startSimulator(),
-  startLiveWalk: () => void startLiveWalk(),
-  startScene: (scene) => void startScene(scene as Scene),
+  startScene: (scene) => void startFromHome(scene as Scene),
   soundCheck: () => audio.spatialTest(4),
   render: renderVoice,
   close: () => {
@@ -1672,10 +1745,12 @@ function renderVoice(step: MenuStep, hi: number, heard: string): void {
   const HOLD = 600, DOUBLE = 350;
   let timer: number | undefined, tapTimer: number | undefined, held = false, taps = 0, lastPointer = 0;
   const first = async () => {
-    // The very first tap unlocks audio and speech (browsers require a tap).
+    // The very first tap unlocks audio and speech (browsers require a tap),
+    // then says how EchoPath works and asks the first question.
     await audio.unlock().catch(() => {});
     announcer.unlock();
-    voiceMenu.begin();
+    voiceMenu.begin(introSaid ? '' : HOW_IT_WORKS);
+    introSaid = true;
   };
   const tap = () => (voiceMenu.active ? voiceMenu.tap() : void first());
   el.addEventListener('pointerdown', () => {
@@ -1847,7 +1922,12 @@ function returnHome(): void {
 
 // Initial state (after every const above is initialised).
 applySettings(settings);
-if (settings.voiceMenu) show('voice');
+renderHome('root', false); // the visual home, one tap away ("Visual menu")
+// The app opens on the voice menu, with its first question already on screen.
+if (!settings.voiceMenu) update({ voiceMenu: true });
+show('voice');
+voiceMenu.preview();
+$('voice-target-label').textContent = 'Tap anywhere to start';
 void audio.setOutput(settings.audioOutputId); // remembered headphones; applied when audio starts
 void refreshChecks();
 

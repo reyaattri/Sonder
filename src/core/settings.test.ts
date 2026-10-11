@@ -26,3 +26,11 @@ describe('v7: purple guide line removed', () => {
     expect(migrate({ ...DEFAULT_SETTINGS, ...raw } as Settings, raw).lineColor).toBe('yellow');
   });
 });
+
+describe('v9: opens on the voice menu', () => {
+  it('the voice menu is the home page (the visual menu stays one tap away)', () => {
+    const raw = { settingsVersion: 8, voiceMenu: false } as unknown as Partial<Settings>;
+    expect(migrate({ ...DEFAULT_SETTINGS, ...raw } as Settings, raw).voiceMenu).toBe(true);
+    expect(DEFAULT_SETTINGS.voiceMenu).toBe(true);
+  });
+});

@@ -46,77 +46,19 @@
         </div>
       </header>
 
-      <section class="card" aria-labelledby="activity-title">
-        <h2 id="activity-title">What are you doing?</h2>
-        <div class="activities" role="radiogroup" aria-labelledby="activity-title" id="activity-group">
-          <button type="button" role="radio" data-activity="walk">
-            <span class="act-name">Walk</span>
-            <span class="act-desc">Streets, indoors, jogging. Hear people, vehicles and obstacles around you.</span>
-          </button>
-          <button type="button" role="radio" data-activity="track">
-            <span class="act-name">Track run</span>
-            <span class="act-desc">Running track lane guide. Silent when centred, pings and buzzes as you drift. Live pace and distance.</span>
-          </button>
-        </div>
+      <button type="button" id="sound-on" class="sound-on">🔊 Tap anywhere to turn on sound and hear how EchoPath works</button>
+      <!-- One question at a time, like the voice menu: live view or simulation, then which one. -->
+      <section class="home-flow" aria-labelledby="home-q">
+        <h2 id="home-q" tabindex="-1">Live view or simulation?</h2>
+        <p class="hint" id="home-hint">Live view uses your camera in the real world. Simulation needs no camera.</p>
+        <div class="home-choices" id="home-choices"></div>
       </section>
-
-      <section class="card" aria-labelledby="track-title" id="track-card" hidden>
-        <h2 id="track-title">Track setup</h2>
-        <p class="hint">Strap the phone to your chest, back camera facing forward and tilted slightly down so it sees the lane lines a few steps ahead.</p>
-        <p class="hint"><strong>Training aid.</strong> In competition, World Para Athletics requires T11 athletes to run tethered to a guide, and some races ban earphones for para athletes. Check your race's rules, and train with a sighted guide nearby.</p>
-        <ul class="checks">
-          <li data-check="gps"><span class="dot"></span><span class="what">GPS (pace and distance)</span><span class="val">Asks when you start</span></li>
-          <li data-check="haptics"><span class="dot"></span><span class="what">Vibration</span><span class="val">Checking</span></li>
-        </ul>
-      </section>
-
-      <section class="card" aria-labelledby="mount-title" id="mount-card">
-        <h2 id="mount-title">Where is the phone?</h2>
-        <div class="segmented" role="radiogroup" aria-labelledby="mount-title" id="mount-group">
-          <button type="button" role="radio" data-mount="chest">Chest</button>
-          <button type="button" role="radio" data-mount="waist">Waist</button>
-          <button type="button" role="radio" data-mount="hand">In hand</button>
-          <button type="button" role="radio" data-mount="table">On a table</button>
-        </div>
-        <p class="hint" id="mount-hint"></p>
-      </section>
-
-      <section class="card" aria-labelledby="ready-title">
-        <h2 id="ready-title">Ready check</h2>
-        <ul class="checks" id="checks">
-          <li data-check="sound"><span class="dot"></span><span class="what">Sound</span><span class="val">Not tested yet</span></li>
-          <li data-check="camera"><span class="dot"></span><span class="what">Camera</span><span class="val">Asks when you start</span></li>
-          <li data-check="model"><span class="dot"></span><span class="what">Detection</span><span class="val">Loads when you start</span></li>
-          <li data-check="motion"><span class="dot"></span><span class="what">Walking sensor</span><span class="val">Starts with EchoPath</span></li>
-          <li data-check="battery"><span class="dot"></span><span class="what">Battery</span><span class="val">Unknown</span></li>
-        </ul>
-      </section>
-
-      <button id="btn-start" class="big primary" type="button">Start</button>
-      <div class="row2">
+      <div class="row2 home-tools">
+        <button id="btn-how" type="button">How it works</button>
         <button id="btn-sound" type="button">Sound check</button>
-        <button id="btn-settings-welcome" type="button">Settings</button>
       </div>
+      <button id="btn-settings-welcome" type="button">Settings</button>
       <button id="btn-voice-menu" type="button">Voice menu (eyes-free)</button>
-      <section class="card" aria-labelledby="practice-title">
-        <h2 id="practice-title">Live and practice</h2>
-        <p class="hint">Live uses your camera in the real world: scan around you, then walk. Practice runs EchoPath on a simulated world.</p>
-        <label class="field">Scene
-          <select id="practice-scene">
-            <optgroup label="Live, real world (your camera)">
-              <option value="live-walk">Live: scan around you, then walk</option>
-              <option value="live-line">Live: walk or run along a painted line</option>
-              <option value="live-lane">Live: run in a track lane</option>
-            </optgroup>
-            <optgroup label="Simulation (real EchoPath pipeline, simulated world)">
-              <option value="walk">Walk: park path with poles, bins, benches, rocks, leaves, people</option>
-              <option value="stadium">Run: 400 m track, lane 3</option>
-              <option value="road">Run: road with yellow guide line</option>
-            </optgroup>
-          </select>
-        </label>
-        <button id="btn-practice" type="button">Start practice</button>
-      </section>
       <p class="note">Everything runs on this phone. Nothing is recorded or uploaded.</p>
       <p class="note">EchoPath is a supplementary aid. Keep using your cane, guide dog or sighted help.</p>
     </main>
