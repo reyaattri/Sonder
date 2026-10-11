@@ -236,6 +236,33 @@ Nothing beeps constantly. Silence means nothing needs your attention right now.
 - **Existing users** are moved to these calm settings automatically (settings version 8).
 - **Measured (walk simulator, 32 s):** 83 % of the time completely silent. The 10 sounds were all for something in the walker's path (a blockage, a person to step around), plus 3 spoken sentences. **Track simulator, normal running:** silent; the steering sound stayed at zero within 0.23 m of the line.
 
+### Severe cases only: sound, vibration and ear rumble
+
+Live modes and simulations make **no continuous beeping**. Sound is kept for severe moments:
+
+| Sound | When |
+|---|---|
+| Virtual cane (depth) | only within **1.3 m** (it used to sound whenever anything was within 2.5 m) |
+| Step / rock tock | **once** per hazard, only within 1.5 m. Flat look-alikes (shadows, road markings) are silent |
+| Walking cues | something in your path within **2.5 m**, or coming at you |
+| Track: line lost | **one** beep per loss (it used to repeat every 2.5 s); STOP repeats every 5 s, not 3 |
+| Track: bend loop | off |
+| Track: obstacle sound | only within 2 m |
+| Track: drift warning | from 0.9 m off the line |
+
+**Felt, not just heard.** Severe moments add phone vibration (Android; iPhone browsers have no vibration) and a low **rumble in the headphone ear** of the side to go:
+
+| Moment | Phone vibration | Headphone rumble |
+|---|---|---|
+| Step left | 1 buzz | left ear |
+| Step right | 2 buzzes | right ear |
+| STOP | long pattern | both ears |
+| Duck (head height) | 3 quick | both ears |
+
+Measured on the real output: the rumble plays left only, right only, or both ears equally. In the walk simulator (40 s at 12 fps): silent 69 % of the time, cane on for 4 frames, vibration and rumble only at *step right* and STOP.
+
+**Speaking on open.** The app tries to speak the moment it opens (*"Welcome to EchoPath. Tap anywhere to continue."*), with no tap. Screen readers (VoiceOver, TalkBack) always announce it. Phone browsers may still hold speech until the first touch; that's a browser rule no website can override. When EchoPath is installed to the home screen, Android Chrome is more permissive.
+
 ### Talking only when it matters (walk mode)
 
 Sounds carry where things are, continuously; speech is kept for what matters. Every sentence goes through one policy (`src/speech/talkPolicy.ts`):

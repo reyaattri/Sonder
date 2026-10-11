@@ -1928,6 +1928,16 @@ if (!settings.voiceMenu) update({ voiceMenu: true });
 show('voice');
 voiceMenu.preview();
 $('voice-target-label').textContent = 'Tap anywhere to start';
+// Speak as soon as the app opens. Browsers only allow this without a tap in some
+// cases (e.g. installed to the home screen); a queued sentence is cancelled by
+// the first tap's own speech. Screen readers (VoiceOver, TalkBack) always read
+// this out on open, with no tap.
+announcer.showText('EchoPath. Live view or simulation? Tap anywhere to start.', true);
+try {
+  if ('speechSynthesis' in window) speechSynthesis.speak(new SpeechSynthesisUtterance('Welcome to EchoPath. Tap anywhere to continue.'));
+} catch {
+  /* blocked until the first tap */
+}
 void audio.setOutput(settings.audioOutputId); // remembered headphones; applied when audio starts
 void refreshChecks();
 

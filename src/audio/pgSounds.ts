@@ -42,7 +42,7 @@ type SoundName = keyof typeof FILES;
 const MAX_ROTATION_DEG = 45;
 const SENSITIVITY = 0.4;
 const WARNING_M = 1.5;
-const WARNING_START = 0.4;
+const WARNING_START = 0.6; // warning only from 0.9 m off the line (severe drift)
 const TURN_SENSITIVITY = 0.5;
 /**
  * Calm: the steering sound is SILENT until the correction is real (the
@@ -196,7 +196,8 @@ export class PgSoundPack {
     const warn = applyShaping(Math.max(-1, Math.min(1, s.lateralM / WARNING_M)));
     this.set('warning', warningPan(warn), lerp(Math.abs(warn), WARNING_START, 1, 1, 2, 2), t);
     const turn = applyShaping(Math.max(-1, Math.min(1, s.turnAheadDeg / MAX_ROTATION_DEG)));
-    const tv = lerp(Math.abs(turn), TURN_SENSITIVITY, 1, 0, 0.5);
+    // Calm: no bend loop (bends are announced once instead).
+    const tv = 0 * lerp(Math.abs(turn), TURN_SENSITIVITY, 1, 0, 0.5);
     this.set('turn', [turn < 0 ? tv : 0, turn > 0 ? tv : 0], 1, t);
     // Ear vibration follows the steering side, only once the correction is real.
     const k = lerp(Math.abs(steer), 0.2, 1, 0, rumbleLevel);

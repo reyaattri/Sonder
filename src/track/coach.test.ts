@@ -25,12 +25,12 @@ describe('pace coach', () => {
 });
 
 describe('STOP guard (guide-line style)', () => {
-  it('lost line while moving -> STOP after 1.5 s, repeated every 3 s, then GO when found', () => {
+  it('lost line while moving -> STOP after 1.5 s, repeated every 5 s (calm), then GO when found', () => {
     const g = new StopGuard();
     expect(g.update(true, 0, true, 0)).toBeNull();
     expect(g.update(true, 0, true, 1600)).toBe('stop');
-    expect(g.update(true, 0, true, 2600)).toBeNull();
-    expect(g.update(true, 0, true, 4700)).toBe('stop');
+    expect(g.update(true, 0, true, 4700)).toBeNull();
+    expect(g.update(true, 0, true, 6700)).toBe('stop');
     expect(g.update(false, 0.1, true, 5000)).toBe('go');
     expect(g.update(false, 0.1, true, 5100)).toBeNull();
   });

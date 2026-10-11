@@ -94,6 +94,7 @@ export class TrackSession {
   private watchdog: number | undefined;
   private lastFrame = 0;
   private lastLostCue = -Infinity;
+  private lostCued = false;
   private lostToldTilt = false;
   private detecting = false;
   private lastAhead = -Infinity;
@@ -330,7 +331,7 @@ export class TrackSession {
           steerDeg: (steerRad * 180) / Math.PI,
           lateralM: world ? world.lateral : (predicted / 0.5) * half,
           turnAheadDeg: world ? (world.control.turnAhead * 180) / Math.PI : 0,
-          obstacle: !!this.runnerAhead && this.runnerAhead.distance < 3,
+          obstacle: !!this.runnerAhead && this.runnerAhead.distance < 2,
           active: !lost && !stopped,
         },
         s.earVibration,
@@ -406,7 +407,10 @@ export class TrackSession {
       }
       this.lastBend = bend;
     }
-    if (lost && !stopped && now - this.lastLostCue > LOST_REPEAT_MS) {
+    // "Line lost": one beep per loss (STOP takes over if you keep moving).
+    if (!lost) this.lostCued = false;
+    if (lost && !stopped && !this.lostCued && now - this.lastLostCue > LOST_REPEAT_MS) {
+      this.lostCued = true;
       this.lastLostCue = now;
       this.audio.earcon('lineLost');
       if (!this.lostToldTilt) {

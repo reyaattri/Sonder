@@ -93,7 +93,7 @@ export class StopGuard {
     if (lostTooLong || outOfLane) {
       const first = !this.stopped;
       this.stopped = true;
-      if (first || nowMs - this.lastStopCue > 3000) {
+      if (first || nowMs - this.lastStopCue > 5000) {
         this.lastStopCue = nowMs;
         return 'stop';
       }

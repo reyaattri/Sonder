@@ -8,7 +8,7 @@ import { applyEgoMotion, describeScene } from '../perception/egomotion';
 import { effectiveFov, focalPx } from '../perception/geometry';
 import { frameQuality, toGray, type FrameQuality } from '../perception/imageStats';
 import { LgmdDetector, type LgmdOutput } from '../perception/lgmd';
-import { pathDebris, PathEstimator, type PathModel } from '../perception/freespace';
+import { PathEstimator, type PathModel } from '../perception/freespace';
 import { classInfo } from '../perception/classes';
 import { nextGuidance, type GuidanceKey } from '../cues/guidance';
 import { SceneMemory } from '../perception/sceneMemory';
@@ -654,6 +654,21 @@ export class Session {
     }
     this.lastGuideSaid = g.key;
     if (g.resume) this.audio.earcon('opened');
+    if (kind === 'stop') this.feel('stop');
+    else if (g.key === 'left' || g.key === 'right') this.feel(g.key);
+  }
+
+  /**
+   * Severe moments are also FELT: phone vibration (Android) and a rumble in the
+   * headphone ear of the side to go. Step left: 1 buzz, left ear. Step right:
+   * 2 buzzes, right ear. Stop: long pattern, both ears. Duck: 3 quick, both.
+   */
+  private feel(what: 'left' | 'right' | 'stop' | 'duck'): void {
+    const s = this.settings;
+    const pattern = { left: [150], right: [150, 100, 150], stop: [400, 150, 400], duck: [80, 60, 80, 60, 80] }[what];
+    if (s.trackHaptics) navigator.vibrate?.(pattern);
+    const side = what === 'left' ? 'left' : what === 'right' ? 'right' : 'both';
+    this.audio.rumble(side, what === 'stop' ? 0.8 : 0.45, s.earVibration);
   }
 
   /** Speak through the talk policy; true if it was said. */
@@ -704,13 +719,16 @@ export class Session {
     const near = depth?.center ?? null;
     const head = depth?.head ?? null;
     const target = head && (!near || head.z <= near.z + 0.3) ? head : near;
-    // Only once it persists (3 frames) and is within 2.5 m: no chatter from noise.
-    this.caneFrames = target && target.z < 2.5 ? this.caneFrames + 1 : 0;
+    // Severe only: once it persists (3 frames) and is within 1.3 m (a step and a reach).
+    this.caneFrames = target && target.z < 1.3 ? this.caneFrames + 1 : 0;
     if (s.depthCane && target && this.caneFrames >= 3) {
       this.audio.setCane({ active: true, distance: target.z, azimuth: Math.atan2(target.x, target.z), head: target === head });
       if (head && head.z < 2.5 && now - this.lastHeadSaid > 6000) {
         // Close: urgent. Further: a note.
-        if (this.sayIf(head.z < 1.5 ? 'stop' : 'info', head.z < 1.5 ? 'Duck. Head height, ahead.' : 'Head height obstacle ahead.', now, 0)) this.lastHeadSaid = now;
+        if (this.sayIf(head.z < 1.5 ? 'stop' : 'info', head.z < 1.5 ? 'Duck. Head height, ahead.' : 'Head height obstacle ahead.', now, 0)) {
+          this.lastHeadSaid = now;
+          if (head.z < 1.5) this.feel('duck');
+        }
       }
     } else {
       this.audio.setCane({ active: false, distance: 9, azimuth: 0, head: false });
@@ -737,15 +755,17 @@ export class Session {
       this.audio.groundCue((x - 0.5) * 1.1);
       this.sayIf('info', 'Leaves on the path. Could be slippery.', now);
     }
-    const rock = depth?.low ?? null;
-    const debris = rock ? null : pathDebris(path);
-    if (!rock && !debris) {
+    // Severe only: a depth-measured step or rock within 1.5 m, one tock per hazard.
+    // Flat look-alikes (shadows, markings) make no sound at all.
+    void path;
+    const rock = depth?.low && depth.low.z < 1.5 ? depth.low : null;
+    if (!rock) {
       this.hazardFrames = 0;
       return;
     }
     if (++this.hazardFrames < 5) return;
-    const az = rock ? Math.atan2(rock.x, rock.z) : (debris!.x - 0.5) * 1.1;
-    if (now - this.lastHazardCue > 2500) {
+    const az = Math.atan2(rock.x, rock.z);
+    if (this.hazardFrames === 5 && now - this.lastHazardCue > 4000) {
       this.lastHazardCue = now;
       this.audio.groundCue(az);
     }

@@ -705,6 +705,53 @@ export class AudioEngine {
    * Ground hazard (rock, kerb, leaves): a soft, low double "tock" placed DOWN
    * at the hazard's direction, so it sounds like it is on the ground ahead.
    */
+  /**
+   * "Ear vibration": a short, low rumble (two detuned low notes with a 24 Hz
+   * flutter) in one ear or both - felt through the headphones as much as
+   * heard. Used only for severe moments: step left / right, STOP, duck.
+   */
+  rumble(side: 'left' | 'right' | 'both', seconds = 0.5, level = 0.5): void {
+    const ctx = this.ctx;
+    if (!ctx || level <= 0) return;
+    const t = ctx.currentTime + 0.01;
+    const mix = ctx.createGain();
+    mix.gain.value = 0.5;
+    const oscs = [48, 51].map((f) => {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.connect(mix);
+      return o;
+    });
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 160;
+    const am = ctx.createGain();
+    am.gain.value = 0.5;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 24;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.5;
+    lfo.connect(depth).connect(am.gain);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(level, t + 0.04);
+    env.gain.setValueAtTime(level, t + seconds - 0.08);
+    env.gain.linearRampToValueAtTime(0, t + seconds);
+    const merger = ctx.createChannelMerger(2);
+    const l = ctx.createGain(), r = ctx.createGain();
+    l.gain.value = side === 'right' ? 0 : 1;
+    r.gain.value = side === 'left' ? 0 : 1;
+    mix.connect(lp).connect(am).connect(env);
+    env.connect(l).connect(merger, 0, 0);
+    env.connect(r).connect(merger, 0, 1);
+    merger.connect(this.master);
+    for (const o of [...oscs, lfo]) {
+      o.start(t);
+      o.stop(t + seconds + 0.05);
+    }
+  }
+
   groundCue(azimuth: number): void {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;

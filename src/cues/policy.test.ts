@@ -121,9 +121,9 @@ describe('cue policy', () => {
 describe('calm cue density (everyday walking)', () => {
   const calm = { ...cfg, density: 'calm' as const };
 
-  it('silent unless something is in your path within 3.5 m, or coming at you', () => {
+  it('silent unless something is in your path within 2.5 m, or coming at you', () => {
     const p = new CuePolicy();
-    expect(p.update([track(1, { zone: 'center', distance: 4.5 })], 0, calm).sources).toHaveLength(0);
+    expect(p.update([track(1, { zone: 'center', distance: 3 })], 0, calm).sources).toHaveLength(0);
     const sideChair = track(2, { category: 'static', label: 'chair', zone: 'left', distance: 2.5 });
     expect(p.update([sideChair], 0, calm).sources).toHaveLength(0);
     // Someone beside you who is NOT coming at you: silent.
@@ -132,7 +132,7 @@ describe('calm cue density (everyday walking)', () => {
     const coming = { ...track(3, { zone: 'left', distance: 2.4 }), ttc: 2.5, approaching: true };
     expect(p.update([coming], 100, calm).sources[0]?.triggered).toBe(true);
     // ...and the person ahead cues once they come within range
-    expect(p.update([track(1, { zone: 'center', distance: 3 })], 200, calm).sources.some((s) => s.trackId === 1 && s.triggered)).toBe(true);
+    expect(p.update([track(1, { zone: 'center', distance: 2.3 })], 200, calm).sources.some((s) => s.trackId === 1 && s.triggered)).toBe(true);
   });
 
   it('a person walking across does not re-cue on every zone change', () => {
@@ -144,12 +144,13 @@ describe('calm cue density (everyday walking)', () => {
 
   it('getting closer re-cues only after the minimum gap, but becoming very near is urgent', () => {
     const p = new CuePolicy();
-    const c = { zone: 'center' as const };
-    p.update([track(1, { ...c, distance: 3.4 })], 0, calm);
-    expect(p.update([track(1, { ...c, distance: 2.5 })], 2000, calm).sources.some((s) => s.triggered)).toBe(false);
-    expect(p.update([track(1, { ...c, distance: 2.2 })], 5100, calm).sources.some((s) => s.trackId === 1 && s.triggered)).toBe(true);
+    // Someone beside you coming at you (side cues need an approach in calm mode).
+    const at = (distance: number) => ({ ...track(1, { zone: 'left', distance }), ttc: 2, approaching: true });
+    p.update([at(2.4)], 0, calm);
+    expect(p.update([at(2.2)], 2000, calm).sources.some((s) => s.triggered)).toBe(false);
+    expect(p.update([at(1.6)], 5100, calm).sources.some((s) => s.trackId === 1 && s.triggered)).toBe(true);
     // Very near in your path: the blocked-path sound takes over.
-    expect(p.update([track(1, { ...c, distance: 1.2 })], 6400, calm).blocked).toBe(true);
+    expect(p.update([track(1, { zone: 'center', distance: 1.2 })], 6400, calm).blocked).toBe(true);
   });
 });
 
@@ -232,8 +233,8 @@ describe('looming pathway fusion', () => {
   it('looming explained by a tracked object re-cues that object urgently instead', () => {
     const p = new CuePolicy();
     const calm = { ...cfg, density: 'calm' as const };
-    p.update([track(1, { zone: 'right', distance: 3.5 })], 0, calm);
-    const out = p.update([track(1, { zone: 'right', distance: 3.4 })], 1500, calm, { lgmd: lgmd('right') });
+    p.update([track(1, { zone: 'right', distance: 2.4 })], 0, calm);
+    const out = p.update([track(1, { zone: 'right', distance: 2.3 })], 1500, calm, { lgmd: lgmd('right') });
     expect(out.unexplainedLooming).toBeNull();
     expect(out.sources.find((s) => s.trackId === 1)?.triggered).toBe(true);
   });
